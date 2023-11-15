@@ -106,7 +106,7 @@ class HWCtl:
 		dst = sys.stdout.buffer
 		if addr is not None: # ack/err reply to a command
 			if addr > 0b0111: raise ValueError(addr)
-			cmd = 0x100 | (bool(msg) << 3) | addr
+			cmd = 0x10 | (bool(msg) << 3) | addr
 			cmd |= self.crc3(cmd) << 5
 			dst.write(chr(cmd))
 		if msg: # crc3(0) = 0, so log lines are prefixed by \0
