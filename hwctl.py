@@ -9,7 +9,7 @@ ev_t = enum.Enum('Ev', 'wakeup log err connect disconnect')
 ev_tuple = cs.namedtuple('Event', 't msg', defaults=[None])
 
 signal_cmds = dict(
-	usr1=0x12, usr2=0x02, quit=0x33 )
+	usr1=0x11, usr2=0x01, quit=0x30 )
 
 
 class SerialProtocol(asyncio.Protocol):

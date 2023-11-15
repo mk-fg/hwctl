@@ -12,13 +12,11 @@ class HWCtlConf:
 	poll_noop_delay = 5 * 60 * 1_000
 
 	usb_hub_pins = dict(
-		hub1_port1 = 2, hub1_port3 = 3, hub1_port4 = 4,
+		hub1_port1 = 0, hub1_port3 = 1, hub1_port4 = 2 )
 		# hub1_port2 = x, -- does not have a relay, not used here
-		hub2_port1 = 5 )
 
 	usb_hub_addrs = dict( # addresses sent in commands over tty
-		hub1_port1 = 0, hub1_port3 = 1, hub1_port4 = 2,
-		hub2_port1 = 3 )
+		hub1_port1 = 0, hub1_port3 = 1, hub1_port4 = 2 )
 
 
 class USBPortState:
@@ -96,13 +94,13 @@ class HWCtl:
 
 	def cmd_send(self, addr=None, msg=None):
 		'Sends ack/err reply for addr or a log message without it'
-		if not addr and not msg: return # no-op cmd_result
+		if addr is None and not msg: return # no-op cmd_result
 		dst = sys.stdout.buffer
 		if addr is not None: # ack/err reply to a command
 			if addr > 0xf: raise ValueError(addr)
 			cmd = 0b1110_0000 | (bool(msg) << 4) | addr
 			dst.write(cmd.to_bytes(1, 'big'))
-		if msg: # crc3(0) = 0, so log lines are prefixed by \0
+		if msg:
 			cmd = 0b1100_0000 | (err_bit := addr is not None) << 4
 			if err_bit: cmd |= addr
 			for n, b in enumerate(msg := msg.rstrip().encode()):
