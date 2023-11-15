@@ -52,33 +52,35 @@ Hubs with ppps have two deal-breaking downsides for me:
 
 - They're impossible to find or identify - e.g. any model on uhubctl_ list of
   "known working" is either too old, can't be sourced from here, or is ridiculously
-  expensive, while cheap USB3 Hubs with port power dpdt switches cost like $10.
+  expensive, while USB3 Hubs with port power dpdt switches are dirt-common and
+  cost like $10.
 
-  Chips in many hubs support ppps, but sometimes it toggles data lines,
-  sometimes it only toggles one "fast charging" port, most times it doesn't
-  do anything at all (control tracks not connected to anything), all this
+  Chips in many hubs support ppps, but sometimes it toggles data lines and not
+  VBUS, sometimes it only toggles one "fast charging" port, most times it
+  doesn't do anything at all (control tracks not connected to anything), all this
   changes between minor hw revisions, and afaict not mentioned anywhere by vendors.
 
 - PPPS in USB Hubs has default port power state as ON.
 
   So whenever you reboot the machine, dual-boot it into gaming-Windows or
-  whatever, all the junk plugged into all ports powers on all at once,
-  which is dumb and bad - don't want random disks spinning up/down needlessly
-  or devices power-cycling just because USB Hub has silly defaults.
+  whatever, all the junk plugged into all ports powers-on all at once,
+  which is dumb and bad - that's kinda the idea behind port power control to
+  avoid this, and it takes its toll on devices (esp. spinning-rust ext-hdds).
 
-  Also usually don't want non-main OS accessing stuff like Yubikeys at all,
-  so power to those should always be default-disabled.
+  Also usually don't want non-main OS accessing stuff like Yubikeys at all
+  (that lock themselves up after N access attempts), so power to those should
+  always be default-disabled.
   In some cases, whole point of this per-port power control is to avoid
   seldom-used USB devices getting jerked around all the time, and ppps with
-  default-on state is actually worse than no ppps at all.
+  default-on state is actually worse than simple always-on ports.
 
 Controlling power via $1 SSRs soldered to buttons neatly fixes the issue -
 nothing gets randomly powered-on, and when it does, code on the rp2040
 controller can be smart enough to know when to shut down devices if whatever
-using them stops sending it "still using it" pings.
+using them stops sending it "this one is still in use" pings.
 
-Implemented using stateless ttyACM (usb tty) protocol sending single-byte
-commands back-and-forth, so that there can be no "short read" buffering issues.
+Implemented using stateless protocol sending single-byte commands over ttyACM
+(usb tty) back-and-forth, so that there can be no "short read" buffering issues.
 
 When using mpremote with RP2040, ``mpremote run rp2040-usb-ppps.py``
 won't connect its stdin to the script (at least current 2023 version of it),

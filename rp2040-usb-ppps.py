@@ -6,7 +6,7 @@ import sys, select, time, machine, collections as cs
 
 class HWCtlConf:
 
-	verbose = True
+	verbose = False
 	wdt_timeout = 4 * 60 * 1_000
 	wdt_slack = 500 # added to push sleeps past their target
 	poll_noop_delay = 5 * 60 * 1_000
