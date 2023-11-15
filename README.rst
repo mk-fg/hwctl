@@ -79,8 +79,9 @@ nothing gets randomly powered-on, and when it does, code on the rp2040
 controller can be smart enough to know when to shut down devices if whatever
 using them stops sending it "this one is still in use" pings.
 
-Implemented using stateless protocol sending single-byte commands over ttyACM
-(usb tty) back-and-forth, so that there can be no "short read" buffering issues.
+Implemented using mostly-stateless protocol sending single-byte commands over
+ttyACM (usb tty) back-and-forth, so that there can be no "short read" buffering
+issues.
 
 When using mpremote with RP2040, ``mpremote run rp2040-usb-ppps.py``
 won't connect its stdin to the script (at least current 2023 version of it),

@@ -33,7 +33,7 @@ class USBPortState:
 		if not self.wdt_ts: wdt_st = 'static'
 		else:
 			wdt_st = time.ticks_diff(self.wdt_ts, time.ticks_ms())
-			wdt_st = ( f'wdt.[ last-ping={wdt_st / 1000:,.1f}s' +
+			wdt_st = ( f'wdt=[ last-ping={wdt_st / 1000:,.1f}s' +
 				f' off-in={(self.wdt_timeout - wdt_st) / 1000:,.1f} ]' )
 		return f'<USBPortSt {self.port} #{self.addr}@{self.pin_n} {st} {wdt_st}>'
 
@@ -59,12 +59,11 @@ class USBPortState:
 
 
 class HWCtl:
-
-	# All commands are 1-byte, and start with CRC3 calculated over last 4 (not 5!) bits
-	# << usb-wdt-ping = CCC1 UUUU : UUU - usb-idx (0-15)
-	# << usb-toggle = CCC0 PUUU : UUU - usb-idx (0-7), P=0 - disable, P=1 - enable
-	# >> ack/err = CCC1 SUUU : S=0 - ack, S=1 - error
-	# >> log/err line prefix byte = CCC0 SUUU : S=0 - log line, S=1 - err line for UUU addr
+	# All commands are 1-byte, and have high bits set to be most distinct from ascii
+	# << usb-wdt-ping = 1111 UUUU : U - usb-addr (0-15)
+	# << usb-toggle = 110P UUUU : U - usb-addr (0-15), P=0 - disable, P=1 - enable
+	# >> ack/err = 111E UUUU : E=0 - ack, E=1 - error
+	# >> log/err line prefix byte = 110E UUUU : E=0 - log line, E=1 - err line for U addr
 
 	cmd_result = cs.namedtuple('cmd_res', 'addr err')
 
@@ -75,21 +74,15 @@ class HWCtl:
 		for port, pin_n in conf.usb_hub_pins.items():
 			addr = conf.usb_hub_addrs[port]
 			self.usbs[addr] = USBPortState(port, addr, pin_n, conf.wdt_timeout, log=port_log)
-		self.crc3_4b_table = bytearray(self.crc3(n) for n in range(0x10))
-		self.crc3 = lambda msg: self.crc3_4b_table[msg & 0xf]
 		self.log and self.log(f'HWCtl init done: {len(self.usbs)} usb port(s)')
-
-	def crc3(self, msg, bits=4):
-		crc = msg & (2**bits - 1)
-		for n in range(bits): crc = (crc >> 1) ^ 6 if crc & 1 else crc >> 1
-		return crc
 
 	def cmd_handle(self, cmd):
 		if not cmd: return self.cmd_result(None, None)
-		if cmd >> 5 != self.crc3(cmd):
-			return self.cmd_result(None, f'Invalid cmd-tail CRC3: {cmd:08b}')
-		cmd, addr = cmd & 0b1_1000, cmd & 0b0111
-		if not (wdt := cmd & 0x10): st_enabled = cmd & 0b1000
+		if cmd & 0b1100_0000 != 0b1100_0000:
+			return self.cmd_result( None,
+				f'Invalid cmd prefix-bits: {cmd:08b} ({str(cmd.to_bytes(1, "big"))[2:-1]})' )
+		cmd, addr = (cmd >> 4) & 0b11, cmd & 0b1111
+		if not (wdt := cmd == 0b11): st_enabled = cmd & 1
 		try: st = self.usbs[addr]
 		except KeyError:
 			return self.cmd_result(addr, f'No usb-port set for addr: {addr}')
@@ -102,19 +95,20 @@ class HWCtl:
 		return self.cmd_result(addr, None)
 
 	def cmd_send(self, addr=None, msg=None):
+		'Sends ack/err reply for addr or a log message without it'
 		if not addr and not msg: return # no-op cmd_result
 		dst = sys.stdout.buffer
 		if addr is not None: # ack/err reply to a command
-			if addr > 0b0111: raise ValueError(addr)
-			cmd = 0x10 | (bool(msg) << 3) | addr
-			cmd |= self.crc3(cmd) << 5
-			dst.write(chr(cmd))
+			if addr > 0xf: raise ValueError(addr)
+			cmd = 0b1110_0000 | (bool(msg) << 4) | addr
+			dst.write(cmd.to_bytes(1, 'big'))
 		if msg: # crc3(0) = 0, so log lines are prefixed by \0
-			cmd = (addr_bit_set := addr is not None) << 3
-			if addr_bit_set: cmd |= addr
-			cmd |= self.crc3(cmd) << 5
-			dst.write(chr(cmd))
-			dst.write(msg.rstrip().encode())
+			cmd = 0b1100_0000 | (err_bit := addr is not None) << 4
+			if err_bit: cmd |= addr
+			for n, b in enumerate(msg := msg.rstrip().encode()):
+				if b > 127: msg[n] = 35 # #-char
+			dst.write(cmd.to_bytes(1, 'big'))
+			dst.write(msg)
 			dst.write(b'\n')
 
 	def wdt_td(self):
