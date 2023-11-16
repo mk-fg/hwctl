@@ -12,11 +12,11 @@ class HWCtlConf:
 	poll_noop_delay = 5 * 60 * 1_000
 
 	usb_hub_pins = dict(
-		hub1_port1 = 0, hub1_port3 = 1, hub1_port4 = 2 )
-		# hub1_port2 = x, -- does not have a relay, not used here
+		hub1_port1 = 0, hub1_port2 = 1, hub1_port4 = 2 )
+		# hub1_port3 = x, -- does not have a relay, not used here
 
 	usb_hub_addrs = dict( # addresses sent in commands over tty
-		hub1_port1 = 0, hub1_port3 = 1, hub1_port4 = 2 )
+		hub1_port1 = 0, hub1_port2 = 1, hub1_port4 = 2 )
 
 
 class USBPortState:

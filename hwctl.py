@@ -91,17 +91,18 @@ async def run(events, dev, daemon_tasks=None):
 	_proto_cmd_lock = asyncio.Lock()
 	async def _proto_cmd_send(cmd):
 		async with _proto_cmd_lock: await proto.send_command(cmd)
-	def proto_cmd_send(cmd):
+	def proto_cmd_send(cmd, cmd_info=None):
+		if cmd_info: log.info('cmd :: %s', cmd_info)
 		tasks.add(asyncio.create_task(_proto_cmd_send(cmd), name='cmd-send'))
 		events.put_nowait(ev_tuple(ev_t.wakeup))
 
 	for k, cmd in signal_cmds.items():
 		loop.add_signal_handler(
-			getattr(signal, f'SIG{k.upper()}'), proto_cmd_send, cmd )
+			getattr(signal, f'SIG{k.upper()}'), proto_cmd_send, cmd, f'sig={k}' )
 
 	tasks = {asyncio.create_task(events.get(), name='ev')}
 	tasks.update( asyncio.create_task(task, name=name)
-		for name, task in (daemon_tasks or dict()).items() )
+		for name, task in (daemon_tasks or dict()).items() if task )
 	while True:
 		# log.debug('[---] tasks: %s', ' '.join(t.get_name() for t in tasks))
 		done, tasks = await asyncio.wait(
@@ -122,13 +123,11 @@ async def run(events, dev, daemon_tasks=None):
 					log.error('fifo-cmd :: unrecognized - %r', ev.msg); continue
 				if (addr := int(m[1])) > 0xf:
 					log.error('fifo-cmd :: usb-addr out of range - %s', m[1]); continue
-				proto_cmd_send(getattr(cmd_bits, m[2]) | addr)
+				proto_cmd_send(getattr(cmd_bits, m[2]) | addr, ev.msg)
 
 
 async def fifo_read_loop(p, queue):
 	'Reads space-separated cmds from speficied fifo path into queue'
-	loop = asyncio.get_running_loop()
-
 	buff = eof = None
 	def _ev():
 		nonlocal buff, eof
@@ -139,10 +138,9 @@ async def fifo_read_loop(p, queue):
 			if cmd: queue.put_nowait(ev_tuple(
 				ev_t.fifo_cmd, cmd.decode(errors='backslashreplace') ))
 		if not chunk: eof.set_result(None)
-
-	fifo_flags = os.O_RDONLY | os.O_NONBLOCK
+	loop, flags = asyncio.get_running_loop(), os.O_RDONLY | os.O_NONBLOCK
 	while True:
-		with open(fd := os.open(p, fifo_flags), 'rb') as src:
+		with open(fd := os.open(p, flags), 'rb') as src:
 			buff, eof = b'', asyncio.Future()
 			loop.add_reader(fd, _ev)
 			await eof
@@ -190,9 +188,9 @@ def main(args=None):
 
 		if opts.control_fifo:
 			try:
-				if p_exists := (p := pl.Path(opts.control_fifo)).stat():
-					if not stat.S_ISFIFO(p_exists.st_mode):
-						parser.error(f'-f/--control-fifo path already exists, but not a FIFO: {p}')
+				if ( (p_exists := (p := pl.Path(opts.control_fifo)).stat())
+						and not stat.S_ISFIFO(p_exists.st_mode) ):
+					parser.error(f'-f/--control-fifo path already exists, but not a FIFO: {p}')
 			except FileNotFoundError: p_exists = None
 			if not p_exists: os.mkfifo(p)
 			fifo_task = fifo_read_loop(p, events)
