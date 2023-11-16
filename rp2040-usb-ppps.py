@@ -80,7 +80,9 @@ class HWCtl:
 			return self.cmd_result( None,
 				f'Invalid cmd prefix-bits: {cmd:08b} ({str(cmd.to_bytes(1, "big"))[2:-1]})' )
 		cmd, addr = (cmd >> 4) & 0b11, cmd & 0b1111
-		if not (wdt := cmd == 0b11): st_enabled = cmd & 1
+		if not (wdt := cmd == 0b11):
+			if cmd & 0b10: return self.cmd_result(addr, 'Invalid cmd')
+			st_enabled = cmd & 1
 		try: st = self.usbs[addr]
 		except KeyError:
 			return self.cmd_result(addr, f'No usb-port set for addr: {addr}')

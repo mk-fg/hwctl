@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 
 import collections as cs, contextlib as cl, pathlib as pl
-import os, sys, signal, enum, fcntl, logging, asyncio
+import os, sys, re, logging, signal, enum, fcntl, stat, asyncio
 
 import serial, serial_asyncio # https://github.com/pyserial/pyserial-asyncio
 
-ev_t = enum.Enum('Ev', 'wakeup log err connect disconnect')
+ev_t = enum.Enum('Ev', 'wakeup log err connect disconnect fifo_cmd')
 ev_tuple = cs.namedtuple('Event', 't msg', defaults=[None])
 
-signal_cmds = dict(
-	usr1=0x11, usr2=0x01, quit=0x30 )
+cmd_bits = type('CmdBits', (object,), dict(on=0x10, off=0x00, wdt=0x30))
+signal_cmds = dict(usr1=cmd_bits.on | 1, usr2=cmd_bits.off | 1, quit=cmd_bits.wdt | 0)
 
 
 class SerialProtocol(asyncio.Protocol):
@@ -83,23 +83,25 @@ class SerialProtocol(asyncio.Protocol):
 		finally: self.ack_wait = None
 
 
-async def run(dev):
-	events, loop = asyncio.Queue(), asyncio.get_running_loop()
-	transport, proto = await serial_asyncio\
-		.connection_for_serial(loop, lambda: SerialProtocol(events), dev)
+async def run(events, dev, daemon_tasks=None):
+	loop = asyncio.get_running_loop()
+	transport, proto = ( await serial_asyncio
+		.connection_for_serial(loop, lambda: SerialProtocol(events), dev) )
 
 	_proto_cmd_lock = asyncio.Lock()
 	async def _proto_cmd_send(cmd):
-		events.put_nowait(ev_tuple(ev_t.wakeup))
 		async with _proto_cmd_lock: await proto.send_command(cmd)
-	proto_cmd_send = lambda cmd: tasks.add(
-		asyncio.create_task(_proto_cmd_send(cmd), name='cmd') )
+	def proto_cmd_send(cmd):
+		tasks.add(asyncio.create_task(_proto_cmd_send(cmd), name='cmd-send'))
+		events.put_nowait(ev_tuple(ev_t.wakeup))
 
 	for k, cmd in signal_cmds.items():
 		loop.add_signal_handler(
 			getattr(signal, f'SIG{k.upper()}'), proto_cmd_send, cmd )
 
 	tasks = {asyncio.create_task(events.get(), name='ev')}
+	tasks.update( asyncio.create_task(task, name=name)
+		for name, task in (daemon_tasks or dict()).items() )
 	while True:
 		# log.debug('[---] tasks: %s', ' '.join(t.get_name() for t in tasks))
 		done, tasks = await asyncio.wait(
@@ -107,30 +109,66 @@ async def run(dev):
 		for task in done:
 			task, ev = task.get_name(), await task
 			log.debug('[-ev] %s/%s %s', task, len(tasks), ev or '-')
-			if task not in ['ev', 'cmd']:
-				raise RuntimeError(f'Background task failed: {task}')
+			if task not in ['ev', 'cmd-send']: raise RuntimeError(f'Daemon task failed: {task}')
 			if task == 'ev': tasks.add(asyncio.create_task(events.get(), name='ev'))
+			else: continue
+
 			if ev.t is ev_t.wakeup: pass
 			elif ev.t is ev_t.log: log.info('fw-log :: %s', ev.msg)
 			elif ev.t is ev_t.err: log.error(f'mcu-err :: %s', ev.msg)
 			elif ev.t is ev_t.disconnect: return log.error('mcu disconnected, exiting...')
+			elif ev.t is ev_t.fifo_cmd:
+				if not (m := re.fullmatch(r'usb(\d+)=(on|off|wdt)', ev.msg)):
+					log.error('fifo-cmd :: unrecognized - %r', ev.msg); continue
+				if (addr := int(m[1])) > 0xf:
+					log.error('fifo-cmd :: usb-addr out of range - %s', m[1]); continue
+				proto_cmd_send(getattr(cmd_bits, m[2]) | addr)
+
+
+async def fifo_read_loop(p, queue):
+	'Reads space-separated cmds from speficied fifo path into queue'
+	loop = asyncio.get_running_loop()
+
+	buff = eof = None
+	def _ev():
+		nonlocal buff, eof
+		buff += (chunk := src.read())
+		if not chunk: buff += b'\n' # make sure to process last cmd
+		while m := re.search(rb'\s+', buff):
+			cmd, buff = buff[:m.start()], buff[m.end():]
+			if cmd: queue.put_nowait(ev_tuple(
+				ev_t.fifo_cmd, cmd.decode(errors='backslashreplace') ))
+		if not chunk: eof.set_result(None)
+
+	fifo_flags = os.O_RDONLY | os.O_NONBLOCK
+	while True:
+		with open(fd := os.open(p, fifo_flags), 'rb') as src:
+			buff, eof = b'', asyncio.Future()
+			loop.add_reader(fd, _ev)
+			await eof
+			loop.remove_reader(fd)
 
 
 def main(args=None):
-	import argparse
+	import argparse, textwrap
+	dd = lambda text: re.sub( r' \t+', ' ',
+		textwrap.dedent(text).strip('\n') + '\n' ).replace('\t', '  ')
 	parser = argparse.ArgumentParser(
+		formatter_class=argparse.RawTextHelpFormatter, usage='%(prog)s [opts]',
 		description='Script to send commands over tty to usb-connected microcontrollers.')
-	parser.add_argument('-d', '--tty-dev',
-		metavar='dev', default='/dev/ttyACM0',
+	parser.add_argument('-d', '--tty-dev', metavar='dev', default='/dev/ttyACM0',
 		help='tty device node for communicating with an mcu board. Default: %(default)s')
 	parser.add_argument('-b', '--baud-rate', metavar='rate', default=115200,
 		help='Baud rate for tty device communication. Default: %(default)s')
+	parser.add_argument('-f', '--control-fifo', metavar='path', help=dd('''
+		Path to create fifo to read control commands from, space/line-separated.
+		Supported commands (X=0-15): usbX=on, usbX=off, usbX=wdt.'''))
 	parser.add_argument('-p', '--pid-file',
-		metavar='file', help='File to write pid into, for signaling.')
+		metavar='file', help='File to write pid into, for signaling and deduplication.')
 	parser.add_argument('-v', '--verbose',
 		action='store_true', help='Verbose operation mode.')
-	parser.add_argument('--debug', action='store_true',
-		help='Print network traffic in addition to -v/--verbose.')
+	parser.add_argument('--debug',
+		action='store_true', help='Print tty traffic in addition to -v/--verbose info.')
 	opts = parser.parse_args(sys.argv[1:] if args is None else args)
 
 	global log
@@ -141,6 +179,8 @@ def main(args=None):
 	log = logging.getLogger('hwctl')
 
 	with cl.ExitStack() as ctx:
+		events = asyncio.Queue()
+
 		if pid := opts.pid_file and pl.Path(opts.pid_file):
 			pid_file = ctx.enter_context(open(os.open(
 				opts.pid_file, os.O_RDWR | os.O_CREAT, 0o600 ), 'r+b', 0))
@@ -148,8 +188,18 @@ def main(args=None):
 			pid_file.seek(0); pid_file.write(f'{os.getpid()}\n'.encode()); pid_file.truncate()
 			ctx.callback(lambda: pid.unlink(missing_ok=True))
 
+		if opts.control_fifo:
+			try:
+				if p_exists := (p := pl.Path(opts.control_fifo)).stat():
+					if not stat.S_ISFIFO(p_exists.st_mode):
+						parser.error(f'-f/--control-fifo path already exists, but not a FIFO: {p}')
+			except FileNotFoundError: p_exists = None
+			if not p_exists: os.mkfifo(p)
+			fifo_task = fifo_read_loop(p, events)
+		else: fifo_task = None
+
 		dev = ctx.enter_context(serial.Serial(opts.tty_dev, opts.baud_rate, timeout=1.0))
-		try: return asyncio.run(run(dev))
+		try: return asyncio.run(run(events, dev, dict(fifo=fifo_task)))
 		except asyncio.CancelledError: pass
 
 if __name__ == '__main__':

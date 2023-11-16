@@ -111,12 +111,14 @@ For deploying script as long-term firmware, pre-compiling it via
 .. _hwctl: hwctl.py
 
 Linux userspace part of the control process - a daemon script to talk to
-connected microcontrollers and send them commands.
+connected microcontrollers and send them commands, received via whatever
+simple unixy IPC mechanisms.
 
-Currently itself controlled using posix signals, i.e. using
-common ``pkill -SOMESIG -F hwctl.pid`` from terminal or scripts.
-Uses serial_asyncio module from `pyserial/pyserial-asyncio`_ for
-ttyACMx communication.
+Currently itself controlled via signals (e.g. ``pkill -USR1 -F hwctl.pid``, see
+``-p/--pid-file`` option) and any space/line-separated plaintext commands to a FIFO
+pipe (``echo usb3=on >hwctl.fifo``, ``-f/--control-fifo`` option) from terminal or scripts.
+
+Uses serial_asyncio module from `pyserial/pyserial-asyncio`_ for ttyACMx communication.
 
 `Older version`_ used to poll /proc/self/mountinfo fd and do some "don't forget
 to unmount" indication via LEDs connected to Arduino Uno board (running `hwctl.ino`_),
