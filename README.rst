@@ -99,11 +99,16 @@ For deploying script as long-term firmware, pre-compiling it via
 
 (mpy-cross binary used there is trivial to build - see `Arch PKGBUILD here`_)
 
+Also wrote-up some extended thoughts on this subject in a
+`"USB hub per-port power switching done right" blog post`_.
+
 .. _uhubctl: https://github.com/mvp/uhubctl/
 .. _mpy-cross tool:
   https://github.com/micropython/micropython/tree/master/mpy-cross
 .. _Arch PKGBUILD here:
   https://github.com/mk-fg/archlinux-pkgbuilds/blob/master/mpy-cross/PKGBUILD
+.. _"USB hub per-port power switching done right" blog post:
+  https://blog.fraggod.net/2023/11/17/usb-hub-per-port-power-switching-done-right-with-a-couple-wires.html
 
 
 `hwctl`_

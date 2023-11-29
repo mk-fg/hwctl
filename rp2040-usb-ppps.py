@@ -23,7 +23,7 @@ class USBPortState:
 
 	def __init__(self, port, addr, pin_n, wdt_timeout, log=None):
 		self.port, self.addr, self.pin_n, self.log = port, addr, pin_n, log
-		self.pin = machine.Pin(pin_n, machine.Pin.OUT, pull=None, value=0)
+		self.pin = machine.Pin(pin_n, machine.Pin.OUT, value=0)
 		self.pin_st, self.wdt_ts, self.wdt_timeout = False, None, wdt_timeout
 
 	def __repr__(self):
