@@ -140,7 +140,13 @@ async def fifo_read_loop(p, queue):
 		if not chunk: eof.set_result(None)
 	loop, flags = asyncio.get_running_loop(), os.O_RDONLY | os.O_NONBLOCK
 	while True:
-		with open(fd := os.open(p, flags), 'rb') as src:
+		try: os.mkfifo(p)
+		except FileExistsError: pass
+		try: fd = os.open(p, flags)
+		except FileNotFoundError: continue
+		if not stat.S_ISFIFO(os.fstat(fd).st_mode):
+			os.close(fd); p.unlink(missing_ok=True); continue
+		with open(fd, 'rb') as src:
 			buff, eof = b'', asyncio.Future()
 			loop.add_reader(fd, _ev)
 			await eof
@@ -187,13 +193,7 @@ def main(args=None):
 			ctx.callback(lambda: pid.unlink(missing_ok=True))
 
 		if opts.control_fifo:
-			try:
-				if ( (p_exists := (p := pl.Path(opts.control_fifo)).stat())
-						and not stat.S_ISFIFO(p_exists.st_mode) ):
-					parser.error(f'-f/--control-fifo path already exists, but not a FIFO: {p}')
-			except FileNotFoundError: p_exists = None
-			if not p_exists: os.mkfifo(p)
-			fifo_task = fifo_read_loop(p, events)
+			fifo_task = fifo_read_loop(pl.Path(opts.control_fifo), events)
 		else: fifo_task = None
 
 		dev = ctx.enter_context(serial.Serial(opts.tty_dev, opts.baud_rate, timeout=1.0))
