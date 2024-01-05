@@ -138,14 +138,15 @@ async def fifo_read_loop(p, queue):
 			if cmd: queue.put_nowait(ev_tuple(
 				ev_t.fifo_cmd, cmd.decode(errors='backslashreplace') ))
 		if not chunk: eof.set_result(None)
-	loop, flags = asyncio.get_running_loop(), os.O_RDONLY | os.O_NONBLOCK
+	try_mkfifo, loop = True, asyncio.get_running_loop()
 	while True:
-		try: os.mkfifo(p)
-		except FileExistsError: pass
-		try: fd = os.open(p, flags)
-		except FileNotFoundError: continue
+		if try_mkfifo:
+			try: try_mkfifo = os.mkfifo(p)
+			except FileExistsError: pass
+		try: fd = os.open(p, os.O_RDONLY | os.O_NONBLOCK)
+		except FileNotFoundError: try_mkfifo = True; continue
 		if not stat.S_ISFIFO(os.fstat(fd).st_mode):
-			os.close(fd); p.unlink(missing_ok=True); continue
+			os.close(fd); p.unlink(missing_ok=True); try_mkfifo = True; continue
 		with open(fd, 'rb') as src:
 			buff, eof = b'', asyncio.Future()
 			loop.add_reader(fd, _ev)
