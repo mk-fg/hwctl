@@ -10,7 +10,7 @@ in my local setup.
 
 Cheap hobbyist microcontrollers like Arduinos_ and `RP2040 boards`_ are easy to
 use as USB peripherals for normal PCs, to provide smart programmable interface
-to a lot of simplier electrical hardware, electronics and common embedded buses
+to a lot of simpler electrical hardware, electronics and common embedded buses
 like I²C.
 
 E.g. for stuff like switching power of things on-and-off with relays by sending
