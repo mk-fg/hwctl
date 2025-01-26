@@ -8,10 +8,10 @@ Microcontroller firmware and linux userspace scripts/services to control things
 like LEDs, relays, buttons/switches and sensors connected to pins on those mcus
 in my local setup.
 
-Cheap hobbyist microcontrollers like Arduinos_ and `RP2040 boards`_ are easy to
-use as USB peripherals for normal PCs, to provide smart programmable interface
-to a lot of simpler electrical hardware, electronics and common embedded buses
-like I²C.
+Cheap hobby-microcontrollers like Arduinos_, ESP32_ and `RP2040 boards`_ are
+easy to use as USB peripherals for normal PCs, to provide smart programmable
+interface to a lot of simpler electrical hardware, electronics and common embedded
+buses like I²C.
 
 E.g. for stuff like switching power of things on-and-off with relays by sending
 a command byte to /dev/ttyACM0, when it is needed/requested by whatever regular
@@ -35,6 +35,7 @@ Repository URLs:
 - https://fraggod.net/code/git/hwctl
 
 .. _Arduinos: https://www.arduino.cc/
+.. _ESP32: https://en.wikipedia.org/wiki/ESP32
 .. _RP2040 boards:
   https://www.raspberrypi.com/documentation/microcontrollers/rp2040.html
 
@@ -43,10 +44,10 @@ Repository URLs:
 ------------------
 .. _rp2040-usb-ppps: rp2040-usb-ppps.py
 
-RP2040 firmware used to control USB per-port-power-switching, but NOT via actual
-built-in ppps protocol that some USB Hub devices support (and can be done via
-sysfs on linux, or uhubctl_ tool), and instead via cheap MOSFET solid-state-relays,
-soldered to a cheap simple USB Hub with push-button power controls on ports.
+RP2040 firmware-script used to control USB per-port-power-switching, but NOT via
+actual built-in ppps protocol that some USB Hub devices support (and can be done
+using sysfs on linux, or uhubctl_ tool), and instead via cheap solid-state-relays,
+soldered to a simple USB Hub with push-button power controls on ports.
 
 Hubs with ppps have two deal-breaking downsides for me:
 
@@ -79,11 +80,13 @@ nothing gets randomly powered-on, and when it does, code on the rp2040
 controller can be smart enough to know when to shut down devices if whatever
 using them stops sending it "this one is still in use" pings.
 
-Implemented using mostly-stateless protocol sending single-byte commands over
-ttyACM (usb tty) back-and-forth, so that there can be no "short read" buffering
-issues.
+Implemented using mostly-stateless protocol sending single-byte commands over ttyACM
+(usb tty) back-and-forth, so that there can be no "short read" buffering issues.
 
-When using mpremote with RP2040, ``mpremote run rp2040-usb-ppps.py``
+Script also implements listening to connected push-buttons, as configured in
+HWCtlConf at the top, and sending one-byte events for those.
+
+When using mpremote with RP2040s, ``mpremote run rp2040-usb-ppps.py``
 won't connect its stdin to the script (at least current 2023 version of it),
 so right way to actually run it seem to be uploading as ``main.py`` and do
 ``mpremote reset`` or something to that effect.
@@ -116,12 +119,33 @@ Also wrote-up some extended thoughts on this subject in a
 .. _hwctl: hwctl.py
 
 Linux userspace part of the control process - a daemon script to talk to
-connected microcontrollers and send them commands, received via whatever
-simple unixy IPC mechanisms.
+connected microcontrollers, receive button presses and send them commands,
+proxied to/from whatever simple unixy IPC mechanisms, like files and FIFOs.
 
-Currently itself controlled via signals (e.g. ``pkill -USR1 -F hwctl.pid``, see
-``-p/--pid-file`` option) and any space/line-separated plaintext commands to a FIFO
-pipe (``echo usb3=on >hwctl.fifo``, ``-f/--control-fifo`` option) from terminal or scripts.
+- Receiving button presses from MCU is handled via ``-F/--buttons-file`` option,
+  to output those to a local file, which can be used as a queue, handled via some
+  script woken-up by e.g. `systemd.path unit`_.
+
+  For example, ``-F /tmp/btns-lights.log:mode=640:max-bytes=4_000:buttons=1,4-8,11``
+  will dump specified buttons to an auto-rotated logfile at that path, with that mode.
+
+  Something similar to ``tail -F /tmp/btns-lights.log`` can read lines from there.
+
+- Command lines from a local FIFO (as in mkfifo_) can be read by using
+  ``-f/--control-fifo`` option. Those are parsed and forwarded to connected microcontroller.
+
+  Allows sending those from any shell script using e.g. ``echo usb3=on >hwctl.fifo``
+
+  Currently parsed commands are (X=0-15): ``usbX=on``, ``usbX=off``, ``usbX=wdt``,
+  which are encoded and sent to `rp2040-usb-ppps`_ script above.
+
+- Can send commands to MCU, mapped to unix signals - via ``-s/--control-signal`` option.
+
+  Same as with FIFO commands above, with specific signal bound to specific
+  command via cli options, e.g. ``-s usr1=usb2=on -s usr2=usb2=off``
+
+  Can be used via something like ``pkill -USR1 -F hwctl.pid``, allowing to
+  set commands on hwctl invocation instead of in the script that triggers those.
 
 Uses serial_asyncio module from `pyserial/pyserial-asyncio`_ for ttyACMx communication.
 
@@ -130,6 +154,8 @@ to unmount" indication via LEDs connected to Arduino Uno board (running `hwctl.i
 read/debounce physical buttons, as well as similar usb-control wdt logic as
 rp2040-usb-ppps script.
 
+.. _mkfifo: https://man.archlinux.org/man/mkfifo.1
+.. _systemd.path unit: https://man.archlinux.org/man/systemd.path.5
 .. _pyserial/pyserial-asyncio: https://github.com/pyserial/pyserial-asyncio
 .. _Older version: https://github.com/mk-fg/hwctl/blob/0e60923/hwctl.py
 .. _hwctl.ino: https://github.com/mk-fg/hwctl/blob/0e60923/hwctl.ino

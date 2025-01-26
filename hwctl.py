@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 
-import collections as cs, contextlib as cl, pathlib as pl
-import os, sys, re, logging, signal, enum, fcntl, stat, asyncio
+import collections as cs, contextlib as cl, itertools as it, pathlib as pl
+import os, sys, re, logging, signal, enum, fcntl, stat, time, asyncio
 
 import serial, serial_asyncio # https://github.com/pyserial/pyserial-asyncio
 
-ev_t = enum.Enum('Ev', 'wakeup log err connect disconnect fifo_cmd')
+# These events are used for all inputs and outputs in a shared queue
+ev_t = enum.Enum('Ev', 'wakeup log err connect disconnect fifo_cmd sig_cmd button')
 ev_tuple = cs.namedtuple('Event', 't msg', defaults=[None])
 
 cmd_bits = type('CmdBits', (object,), dict(on=0x10, off=0x00, wdt=0x30))
-signal_cmds = dict(usr1=cmd_bits.on | 1, usr2=cmd_bits.off | 1, quit=cmd_bits.wdt | 0)
 
 
 class SerialProtocol(asyncio.Protocol):
@@ -18,6 +18,7 @@ class SerialProtocol(asyncio.Protocol):
 	# >> usb-toggle = 110P UUUU : U - usb-addr (0-15), P=0 - disable, P=1 - enable
 	# << ack/err = 111E UUUU : E=0 - ack, E=1 - error
 	# << log/err line prefix byte = 110E UUUU : E=0 - log line, E=1 - err line for U addr
+	# << button press = 1000 BBBB : B - connected button number (0-15)
 
 	transport = None
 	def __init__(self, queue):
@@ -51,17 +52,16 @@ class SerialProtocol(asyncio.Protocol):
 
 		for n, cmd in enumerate(data, 1):
 			log_pre = f'[<< ] [{cmd:08b} {str(cmd.to_bytes(1))[2:-1]}]'
-
-			if cmd & 0b1100_0000 != 0b1100_0000:
+			if cmd & 0xf0 == 0x80:
+				self.queue.put_nowait(ev_tuple(ev_t.button, ev := (time.time(), cmd & 0x0f)))
+				log.debug('%s button-press: %s', log_pre, ev)
+			elif cmd & 0b1100_0000 != 0b1100_0000:
 				log.error('%s Invalid cmd prefix-bits', log_pre)
-				continue
-
-			if cmd & 0x20:
+			elif cmd & 0x20:
 				st_err, st_ack = cmd & 0x10, '' if self.ack_wait else 'un'
 				log.debug('%s %s [%sexpected]', log_pre, 'err' if st_err else 'ack', st_ack)
 				if st_err: log.error('%s Failure-response for last command', log_pre)
 				if self.ack_wait: self.ack_wait = self.ack_wait.set_result(None)
-
 			else:
 				self.log_ev, addr = ev_t.err if cmd & 0x10 else ev_t.log, cmd & 0xf
 				log.debug('%s line-event (err-addr=%s): %s', log_pre, addr, self.log_ev.name)
@@ -83,7 +83,7 @@ class SerialProtocol(asyncio.Protocol):
 		finally: self.ack_wait = None
 
 
-async def run(events, dev, daemon_tasks=None):
+async def run(events, btns, sigs, dev, daemon_tasks=None):
 	loop = asyncio.get_running_loop()
 	transport, proto = ( await serial_asyncio
 		.connection_for_serial(loop, lambda: SerialProtocol(events), dev) )
@@ -91,14 +91,13 @@ async def run(events, dev, daemon_tasks=None):
 	_proto_cmd_lock = asyncio.Lock()
 	async def _proto_cmd_send(cmd):
 		async with _proto_cmd_lock: await proto.send_command(cmd)
-	def proto_cmd_send(cmd, cmd_info=None):
+	def proto_cmd_send(cmd, cmd_info=None, wakeup=False):
 		if cmd_info: log.info('cmd :: %s', cmd_info)
 		tasks.add(asyncio.create_task(_proto_cmd_send(cmd), name='cmd-send'))
-		events.put_nowait(ev_tuple(ev_t.wakeup))
+		if wakeup: events.put_nowait(ev_tuple(ev_t.wakeup)) # if not from handler loop
 
-	for k, cmd in signal_cmds.items():
-		loop.add_signal_handler(
-			getattr(signal, f'SIG{k.upper()}'), proto_cmd_send, cmd, f'sig={k}' )
+	sig_cmd_send = lambda cmd: events.put_nowait(ev_tuple(ev_t.sig_cmd, cmd))
+	for sig, cmd in sigs.items(): loop.add_signal_handler(sig, sig_cmd_send, cmd)
 
 	tasks = {asyncio.create_task(events.get(), name='ev')}
 	tasks.update( asyncio.create_task(task, name=name)
@@ -118,12 +117,16 @@ async def run(events, dev, daemon_tasks=None):
 			elif ev.t is ev_t.log: log.info('fw-log :: %s', ev.msg)
 			elif ev.t is ev_t.err: log.error(f'mcu-err :: %s', ev.msg)
 			elif ev.t is ev_t.disconnect: return log.error('mcu disconnected, exiting...')
-			elif ev.t is ev_t.fifo_cmd:
+			elif ev.t in [ev_t.fifo_cmd, ev_t.sig_cmd]:
+				cmd_t = 'fifo' if ev.t is ev_t.fifo_cmd else 'sig'
 				if not (m := re.fullmatch(r'usb(\d+)=(on|off|wdt)', ev.msg)):
-					log.error('fifo-cmd :: unrecognized - %r', ev.msg); continue
+					log.error('%s-cmd :: unrecognized - %r', cmd_t, ev.msg); continue
 				if (addr := int(m[1])) > 0xf:
-					log.error('fifo-cmd :: usb-addr out of range - %s', m[1]); continue
+					log.error('%s-cmd :: usb-addr out of range - %s', cmd_t, m[1]); continue
 				proto_cmd_send(getattr(cmd_bits, m[2]) | addr, ev.msg)
+			elif ev.t is ev_t.button:
+				log.info('button-press :: time=%s button=%s', *ev.msg)
+				for q in btns: q.put_nowait(ev.msg)
 
 
 async def fifo_read_loop(p, queue):
@@ -153,6 +156,34 @@ async def fifo_read_loop(p, queue):
 			await eof
 			loop.remove_reader(fd)
 
+async def file_logger_loop(p, queue, buttons=None, mode=0, max_bytes=0, bak_count=1):
+	'Append button-press lines to auto-rotated file from a queue of (ts, btn_n) tuples.'
+	file_list = [p] + list(pl.Path(f'{p}.{n}') for n in range(1, bak_count+1))
+	dst = dst_id = None
+	def _dst_init_check():
+		nonlocal dst, dst_id; reopen = not dst
+		try: st = p.stat()
+		except FileNotFoundError: st = None
+		if reopen := not (dst_id and st and dst_id == (st.st_dev, st.st_ino)):
+			log.debug('Opening (re-)moved/new buttons log-file: %s', p)
+		elif reopen := max_bytes and st and st.st_size >= max_bytes:
+			log.debug( 'Rotating buttons log-file due to size'
+				' limit (%d >= %d): %s', st.st_size, max_bytes, p )
+			for b, a in it.pairwise(reversed(file_list)):
+				with cl.suppress(FileNotFoundError): a.rename(b)
+		if reopen:
+			dst = open(os.open( p, os.O_WRONLY |
+				os.O_APPEND | os.O_CREAT, 0o777 if not mode else 0 ), 'a')
+			if mode: os.chmod(dst.fileno(), mode)
+			st = os.stat(dst.fileno()); dst_id = st.st_dev, st.st_ino
+	try:
+		while True:
+			ts, btn = await queue.get()
+			if buttons and btn not in buttons: continue
+			_dst_init_check(); dst.write(f'{ts} btn={btn}\n'); dst.flush()
+	finally:
+		if dst: dst.close()
+
 
 def main(args=None):
 	import argparse, textwrap
@@ -168,6 +199,24 @@ def main(args=None):
 	parser.add_argument('-f', '--control-fifo', metavar='path', help=dd('''
 		Path to create fifo to read control commands from, space/line-separated.
 		Supported commands (X=0-15): usbX=on, usbX=off, usbX=wdt.'''))
+	parser.add_argument('-s', '--control-signal', metavar='sig=cmd', action='append', help=dd('''
+		Interprets specified unix signal(s) as -f/--control-fifo commands.
+		For example: -s usr1=usb2=on -s usr2=usb2=off. Can be used multiple times.'''))
+	parser.add_argument('-F', '--buttons-file',
+		metavar='path[:opts]', action='append', help=dd('''
+			Path to an output file to append connected button presses to, one per line.
+			Can be specified multiple times, and have ":options" suffix,
+				to control which buttons to write to which file, and their rotation parameters.
+			":options" suffix can have following :-separated options, in any order:
+				- max-bytes=<int> - rotate file on reaching that size. Default = 0 - never.
+				- bak-count=<int> - keep N files with .1, .2, ... suffix after rotation. Default = 1.
+				- mode=<octal> - chmod output file(s) to mode, e.g. 640. Default = 0 - disabled.
+				- buttons=<int>[-<int>][,...] - only output specified comma/space-separated
+						button events into this file, with -N meaning "don't output N". Default = all.
+			Usage examples with options (multiple files can be used at the same time):
+				-F /tmp/btns-all.log:mode=600:max-bytes=8_000:bak-count=3
+				-F /tmp/btns-lights.log:mode=640:max-bytes=4_000:buttons=1,4-8,11
+			Files only get opened/rotated when there's some output there.'''))
 	parser.add_argument('-p', '--pid-file',
 		metavar='file', help='File to write pid into, for signaling and deduplication.')
 	parser.add_argument('-v', '--verbose',
@@ -183,22 +232,46 @@ def main(args=None):
 		format='{levelname:5} :: {message}', datefmt='%Y-%m-%dT%H:%M:%S' )
 	log = logging.getLogger('hwctl')
 
-	with cl.ExitStack() as ctx:
-		events = asyncio.Queue()
+	tasks, events = dict(), asyncio.Queue()
 
+	sigs = dict()
+	for n, opt in enumerate(opts.control_signal or list()):
+		try:
+			sig, _, cmd = opt.partition('=')
+			sig = getattr(signal, f'SIG{sig.upper()}')
+			if not cmd: raise ValueError
+		except: parser.error(f'Invalid -s/--control-signal spec: {opt}')
+		sigs[sig] = cmd
+
+	btn_opts = dict(
+		max_bytes=int, bak_count=int, mode=lambda s: int(s, 8),
+		buttons=lambda s: set(it.chain.from_iterable(
+			range(int(n.split('-', 1)[0]), int(n.split('-', 1)[1])+1)
+				if '-' in n else [int(n)] for n in s.replace(',', ' ').split() )) )
+	for n, opt in enumerate(btns := list(opts.buttons_file or list())):
+		p, _, s = opt.partition(':'); kws = dict()
+		while s.strip():
+			k = v = None; k, _, s = s.partition(':'); k, _, v = k.partition('=')
+			try:
+				if not (k and v): raise ValueError
+				k = k.replace('-', '_'); v = btn_opts[k](v)
+			except: parser.error(f'Invalid -F/--buttons-file options in: {opt}')
+			else: kws[k] = v
+		btns[n], tasks[f'btn-file-{n}:{p}'] = ( (q := asyncio.Queue()),
+			file_logger_loop((p := pl.Path(p).expanduser()), q, **kws) )
+
+	if opts.control_fifo:
+		tasks['fifo'] = fifo_read_loop(pl.Path(opts.control_fifo), events)
+
+	with cl.ExitStack() as ctx:
 		if pid := opts.pid_file and pl.Path(opts.pid_file):
 			pid_file = ctx.enter_context(open(os.open(
 				opts.pid_file, os.O_RDWR | os.O_CREAT, 0o600 ), 'r+b', 0))
 			fcntl.lockf(pid_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
 			pid_file.seek(0); pid_file.write(f'{os.getpid()}\n'.encode()); pid_file.truncate()
 			ctx.callback(lambda: pid.unlink(missing_ok=True))
-
-		if opts.control_fifo:
-			fifo_task = fifo_read_loop(pl.Path(opts.control_fifo), events)
-		else: fifo_task = None
-
 		dev = ctx.enter_context(serial.Serial(opts.tty_dev, opts.baud_rate, timeout=1.0))
-		try: return asyncio.run(run(events, dev, dict(fifo=fifo_task)))
+		try: return asyncio.run(run(events, btns, sigs, dev, tasks))
 		except asyncio.CancelledError: pass
 
 if __name__ == '__main__':

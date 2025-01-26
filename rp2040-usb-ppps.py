@@ -1,22 +1,22 @@
 # RP2040 micropython fw script to control USB port power pins over ttyACM,
 #  using one-byte commands and with a simple watchdog-timeout logic to power them off.
 
-import sys, select, time, machine, collections as cs
+import sys, asyncio, time, machine, collections as cs
 
 
 class HWCtlConf:
 
 	verbose = False
-	wdt_timeout = 4 * 60 * 1_000
-	wdt_slack = 500 # added to push sleeps past their target
-	poll_noop_delay = 5 * 60 * 1_000
+	wdt_timeout = 4 * 60
+	wdt_slack = 0.5 # added to push sleeps past their target
+	btn_debounce = 0.1 # ignore irq events within this time-delta
 
-	usb_hub_pins = dict(
-		hub1_port1 = 0, hub1_port2 = 1, hub1_port4 = 2 )
-		# hub1_port3 = x, -- does not have a relay, not used here
-
-	usb_hub_addrs = dict( # addresses sent in commands over tty
-		hub1_port1 = 0, hub1_port2 = 1, hub1_port4 = 2 )
+	# Addrs are event id's that get sent over tty, stored in U/B bits (see below)
+	usb_hub_ports = dict( # pin=<n> addr=<n || pin>
+		hub1_port1=dict(pin=0), hub1_port2=dict(pin=1), hub1_port4=dict(pin=2) )
+		# hub1_port3= -- does not have a relay, not used here
+	button_pins = dict( # pin=<n> addr=<n || pin> trigger=<0/1>
+		btn1=dict(pin=3, addr=0, trigger=0) )
 
 
 class USBPortState:
@@ -24,7 +24,8 @@ class USBPortState:
 	def __init__(self, port, addr, pin_n, wdt_timeout, log=None):
 		self.port, self.addr, self.pin_n, self.log = port, addr, pin_n, log
 		self.pin = machine.Pin(pin_n, machine.Pin.OUT, value=0)
-		self.pin_st, self.wdt_ts, self.wdt_timeout = False, None, wdt_timeout
+		self.pin_st, self.wdt_ts = False, None
+		self.wdt_timeout = int(wdt_timeout * 1_000)
 
 	def __repr__(self):
 		st = ('OFF', 'ON')[self.pin_st]
@@ -56,94 +57,143 @@ class USBPortState:
 		if td <= 0: self.set_state(0)
 
 
+class GPIOButtonState:
+
+	def __init__(self, name, addr, pin_n, trigger, debounce_td, callback, log=None):
+		self.name, self.addr, self.pin_n, self.log = name, addr, pin_n, log
+		Pin, self.ts, self.debounce_td = machine.Pin, 0, int(debounce_td * 1_000)
+		pull, irq = ( (Pin.PULL_UP, Pin.IRQ_FALLING)
+			if not trigger else (Pin.PULL_UP, Pin.PULL_DOWN) )
+		self.trigger, self.cb, self.pin = trigger, callback, Pin(pin_n, Pin.IN, pull=pull)
+		self.pin.irq(self.irq_handler, trigger=irq)
+
+	__repr__ = lambda s: f'<Button {s.name} #{s.addr}@{s.pin_n}={s.trigger}>'
+
+	def irq_handler(self, pin):
+		ts = time.ticks_ms()
+		if time.ticks_diff(ts, self.ts) < self.debounce_td: return
+		self.ts = ts
+		self.log and self.log(f'{self} - pressed')
+		self.cb(self.addr)
+
+
 class HWCtl:
 	# All commands are 1-byte, and have high bits set to be most distinct from ascii
 	# << usb-wdt-ping = 1111 UUUU : U - usb-addr (0-15)
 	# << usb-toggle = 110P UUUU : U - usb-addr (0-15), P=0 - disable, P=1 - enable
 	# >> ack/err = 111E UUUU : E=0 - ack, E=1 - error
 	# >> log/err line prefix byte = 110E UUUU : E=0 - log line, E=1 - err line for U addr
+	# >> button press = 1000 BBBB : B - connected button number (0-15)
 
-	cmd_result = cs.namedtuple('cmd_res', 'addr err')
+	def __init__(self, conf, send):
+		self.conf, self.send, self.usbs, self.btns = conf, send, dict(), dict()
+		self.log = conf.verbose and (lambda msg: self.cmd_send(f'[hwctl] {msg}'))
 
-	def __init__(self, conf):
-		self.conf, self.usbs = conf, dict() # addr -> usb_port_state
-		self.log = conf.verbose and (lambda msg: self.cmd_send(msg=f'[hwctl] {msg}'))
-		port_log = conf.verbose and (lambda msg: self.cmd_send(msg=f'[upst] {msg}'))
-		for port, pin_n in conf.usb_hub_pins.items():
-			addr = conf.usb_hub_addrs[port]
+		port_log = conf.verbose and (lambda msg: self.cmd_send(f'[upst] {msg}'))
+		for port, info in conf.usb_hub_ports.items():
+			pin_n = info['pin']; addr = info.get('addr', pin_n)
 			self.usbs[addr] = USBPortState(port, addr, pin_n, conf.wdt_timeout, log=port_log)
-		self.log and self.log(f'HWCtl init done: {len(self.usbs)} usb port(s)')
+
+		btn_log = conf.verbose and (lambda msg: self.cmd_send(f'[btn] {msg}'))
+		btn_send = lambda addr: self.send(0x80 | addr)
+		for btn, info in conf.button_pins.items():
+			pin_n = info['pin']; addr = info.get('addr', pin_n)
+			self.btns[btn] = GPIOButtonState( btn, addr, pin_n,
+				info['trigger'], conf.btn_debounce, btn_send, log=btn_log )
+
+		self.log and self.log( 'HWCtl init done:'
+			f' {len(self.usbs)} usb port(s), {len(self.btns)} button(s)' )
+
+	_cmd_result = cs.namedtuple('cmd_res', 'addr err')
 
 	def cmd_handle(self, cmd):
-		if not cmd: return self.cmd_result(None, None)
+		res = self.cmd_parse(cmd)
+		self.cmd_send(res.addr, res.err)
+
+	def cmd_parse(self, cmd):
+		if not cmd: return self._cmd_result(None, None)
 		if cmd & 0b1100_0000 != 0b1100_0000:
-			return self.cmd_result( None,
+			return self._cmd_result( None,
 				f'Invalid cmd prefix-bits: {cmd:08b} ({str(cmd.to_bytes(1, "big"))[2:-1]})' )
 		cmd, addr = (cmd >> 4) & 0b11, cmd & 0b1111
 		if not (wdt := cmd == 0b11):
-			if cmd & 0b10: return self.cmd_result(addr, 'Invalid cmd')
+			if cmd & 0b10: return self._cmd_result(addr, 'Invalid cmd')
 			st_enabled = cmd & 1
 		try: st = self.usbs[addr]
 		except KeyError:
-			return self.cmd_result(addr, f'No usb-port set for addr: {addr}')
+			return self._cmd_result(addr, f'No usb-port set for addr: {addr}')
 		try:
 			if wdt: st.wdt_ping()
 			else: st.set_state(st_enabled)
 		except Exception as err:
-			return self.cmd_result( addr,
+			return self._cmd_result( addr,
 				f'State/GPIO error: [{err.__class__.__name__}] {err}' )
-		return self.cmd_result(addr, None)
+		return self._cmd_result(addr, None)
 
 	def cmd_send(self, addr=None, msg=None):
-		'Sends ack/err reply for addr or a log message without it'
+		'Format ack/err reply for usb-cmd addr or a log message without it'
 		if addr is None and not msg: return # no-op cmd_result
-		dst = sys.stdout.buffer
+		if msg is None and isinstance(addr, str): addr, msg = None, addr
+		res = list()
 		if addr is not None: # ack/err reply to a command
-			if addr > 0xf: raise ValueError(addr)
-			cmd = 0b1110_0000 | (bool(msg) << 4) | addr
-			dst.write(cmd.to_bytes(1, 'big'))
+			if addr <= 0xf:
+				cmd = 0b1110_0000 | (bool(msg) << 4) | addr
+				res.append(cmd.to_bytes(1, 'big'))
+			else: msg = f'Invalid addr for usb ack/err: {addr}'
 		if msg:
 			cmd = 0b1100_0000 | (err_bit := addr is not None) << 4
 			if err_bit: cmd |= addr
 			for n, b in enumerate(msg := msg.rstrip().encode()):
 				if b > 127: msg[n] = 35 # #-char
-			dst.write(cmd.to_bytes(1, 'big'))
-			dst.write(msg)
-			dst.write(b'\n')
+			res.append(cmd.to_bytes(1, 'big')); res.append(msg); res.append(b'\n')
+		self.send(res)
 
 	def wdt_td(self):
 		ts, td_max = time.ticks_ms(), 0xfffffff
 		td = min(st.wdt_td(ts, td_max) for st in self.usbs.values())
-		return int(td) if td != td_max else 0
+		return td != td_max and td
 
 	def wdt_check(self):
 		ts = time.ticks_ms()
 		for st in self.usbs.values(): st.wdt_check(ts)
 
 
-def main():
-	hwctl = HWCtl(conf := HWCtlConf())
-	p_log = conf.verbose and (
-		lambda msg: hwctl.cmd_send(msg=f'[main] {msg}') )
+async def main():
+	stdout = asyncio.StreamWriter(sys.stdout, {})
+	outq, outq_flag = cs.deque([], 20), asyncio.ThreadSafeFlag()
+	def outq_send(data):
+		if not data: return
+		elif isinstance(data, int): outq.append(bytes([data]))
+		elif isinstance(data, bytes): outq.append(data)
+		elif isinstance(data, list): outq.extend(data)
+		else: outq.append(data.encode())
+		outq_flag.set()
+	async def _outq_flush():
+		while True:
+			await outq_flag.wait()
+			while outq: stdout.write(outq.popleft())
+			if outq: outq_flag.set()
+			await stdout.drain()
+	outq_task = asyncio.create_task(_outq_flush())
 
-	poller = select.poll()
-	poller.register(sys.stdin.buffer, select.POLLIN)
-	ev_err = select.POLLHUP | select.POLLERR
-
-	p_log and p_log('--- main init ---')
+	hwctl = HWCtl(conf := HWCtlConf(), outq_send)
+	p_log = conf.verbose and (lambda msg: hwctl.cmd_send(f'[main] {msg}'))
+	p_log and p_log('--- scheduler init ---')
+	stdin = asyncio.StreamReader(sys.stdin.buffer)
 	while True:
-		delay = conf.wdt_slack + (hwctl.wdt_td() or conf.poll_noop_delay)
-		p_log and p_log(f'Poll delay: {delay:,d}')
-		if not (ev := poller.poll(delay)): # poll timeout
-			hwctl.wdt_check()
-			continue
-		if ev[0][1] & ev_err or not ev[0][1] & select.POLLIN:
-			p_log and p_log('Error polling input tty, exiting...')
-			break
-		if cmd := sys.stdin.buffer.read(1):
-			res = hwctl.cmd_handle(cmd[0])
-			hwctl.cmd_send(res.addr, res.err)
-	p_log and p_log('--- main stop ---')
+		read = stdin.readexactly(1)
+		if delay := hwctl.wdt_td():
+			delay = conf.wdt_slack + delay / 1_000
+			read = asyncio.wait_for(read, delay)
+			p_log and p_log(f'wdt-delay wait: {delay:.1f}s')
+		else: p_log and p_log('Waiting for tty command...')
+		try: cmd = await read
+		except asyncio.TimeoutError: hwctl.wdt_check(); continue
+		except Exception as err:
+			p_log and p_log(f'Error polling input tty [ {err} ], exiting...'); break
+		hwctl.cmd_handle(cmd[0])
+	outq_task.cancel()
+	p_log and p_log('--- scheduler stop ---')
 
-run = main
-if __name__ == '__main__': main()
+def run(): asyncio.run(main())
+if __name__ == '__main__': run()
