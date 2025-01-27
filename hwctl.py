@@ -6,7 +6,8 @@ import os, sys, re, logging, signal, enum, fcntl, stat, time, asyncio
 import serial, serial_asyncio # https://github.com/pyserial/pyserial-asyncio
 
 # These events are used for all inputs and outputs in a shared queue
-ev_t = enum.Enum('Ev', 'wakeup log err connect disconnect fifo_cmd sig_cmd button')
+ev_t = enum.Enum( 'Ev',
+	'wakeup log err connect disconnect init_cmd fifo_cmd sig_cmd button' )
 ev_tuple = cs.namedtuple('Event', 't msg', defaults=[None])
 
 cmd_bits = type('CmdBits', (object,), dict(on=0x10, off=0x00, wdt=0x30))
@@ -22,13 +23,13 @@ class SerialProtocol(asyncio.Protocol):
 
 	transport = None
 	def __init__(self, queue):
-		self.queue, self.ack_wait = queue, None
+		self.transport, self.queue, self.ack_wait = asyncio.Event(), queue, None
 	def connection_made(self, transport):
 		self.log_ev = self.log_buff = None
-		self.transport = transport
+		ev, self.transport = self.transport, transport; ev.set()
 		self.queue.put_nowait(ev_tuple(ev_t.connect))
 	def connection_lost(self, exc):
-		self.log_ev = self.log_buff = None
+		self.log_ev = self.log_buff = self.transport = None
 		self.queue.put_nowait(ev_tuple(ev_t.disconnect))
 
 	def data_received(self, data):
@@ -76,6 +77,8 @@ class SerialProtocol(asyncio.Protocol):
 		log_pre = f'[ >>] [{cmd:08b} {str(cmd.to_bytes(1))[2:-1]}]'
 		log.debug('%s send', log_pre)
 		if self.ack_wait: raise RuntimeError('Concurrent send_command calls')
+		if isinstance(self.transport, asyncio.Event): await self.transport.wait()
+		if not self.transport: return log.warning('%s Send after disconnect', log_pre)
 		self.transport.write(cmd.to_bytes(1))
 		self.ack_wait = asyncio.Future()
 		try: await asyncio.wait_for(self.ack_wait, timeout=timeout)
@@ -83,7 +86,7 @@ class SerialProtocol(asyncio.Protocol):
 		finally: self.ack_wait = None
 
 
-async def run(events, btns, sigs, dev, daemon_tasks=None):
+async def run(events, dev, btns, sigs, init_cmds, daemon_tasks=None):
 	loop = asyncio.get_running_loop()
 	transport, proto = ( await serial_asyncio
 		.connection_for_serial(loop, lambda: SerialProtocol(events), dev) )
@@ -98,6 +101,7 @@ async def run(events, btns, sigs, dev, daemon_tasks=None):
 
 	sig_cmd_send = lambda cmd: events.put_nowait(ev_tuple(ev_t.sig_cmd, cmd))
 	for sig, cmd in sigs.items(): loop.add_signal_handler(sig, sig_cmd_send, cmd)
+	for cmd in init_cmds: events.put_nowait(ev_tuple(ev_t.init_cmd, cmd))
 
 	tasks = {asyncio.create_task(events.get(), name='ev')}
 	tasks.update( asyncio.create_task(task, name=name)
@@ -117,7 +121,7 @@ async def run(events, btns, sigs, dev, daemon_tasks=None):
 			elif ev.t is ev_t.log: log.info('fw-log :: %s', ev.msg)
 			elif ev.t is ev_t.err: log.error(f'mcu-err :: %s', ev.msg)
 			elif ev.t is ev_t.disconnect: return log.error('mcu disconnected, exiting...')
-			elif ev.t in [ev_t.fifo_cmd, ev_t.sig_cmd]:
+			elif ev.t in [ev_t.fifo_cmd, ev_t.sig_cmd, ev_t.init_cmd]:
 				cmd_t = 'fifo' if ev.t is ev_t.fifo_cmd else 'sig'
 				if not (m := re.fullmatch(r'usb(\d+)=(on|off|wdt)', ev.msg)):
 					log.error('%s-cmd :: unrecognized - %r', cmd_t, ev.msg); continue
@@ -202,6 +206,9 @@ def main(args=None):
 	parser.add_argument('-s', '--control-signal', metavar='sig=cmd', action='append', help=dd('''
 		Interprets specified unix signal(s) as -f/--control-fifo commands.
 		For example: -s usr1=usb2=on -s usr2=usb2=off. Can be used multiple times.'''))
+	parser.add_argument('-c', '--init-cmd', metavar='cmd', action='append', help=dd('''
+		Run specified commands on script start, and warn if they don't get ACKed properly.
+		Commands use same format as with -f/--control-fifo option. Can be used multiple times.'''))
 	parser.add_argument('-F', '--buttons-file',
 		metavar='path[:opts]', action='append', help=dd('''
 			Path to an output file to append connected button presses to, one per line.
@@ -233,6 +240,7 @@ def main(args=None):
 	log = logging.getLogger('hwctl')
 
 	tasks, events = dict(), asyncio.Queue()
+	init_cmds = opts.init_cmd or list()
 
 	sigs = dict()
 	for n, opt in enumerate(opts.control_signal or list()):
@@ -271,7 +279,7 @@ def main(args=None):
 			pid_file.seek(0); pid_file.write(f'{os.getpid()}\n'.encode()); pid_file.truncate()
 			ctx.callback(lambda: pid.unlink(missing_ok=True))
 		dev = ctx.enter_context(serial.Serial(opts.tty_dev, opts.baud_rate, timeout=1.0))
-		try: return asyncio.run(run(events, btns, sigs, dev, tasks))
+		try: return asyncio.run(run(events, dev, btns, sigs, init_cmds, tasks))
 		except asyncio.CancelledError: pass
 
 if __name__ == '__main__':
