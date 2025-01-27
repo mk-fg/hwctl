@@ -7,23 +7,25 @@ import sys, asyncio, time, machine, collections as cs
 class HWCtlConf:
 
 	verbose = False
-	wdt_timeout = 4 * 60
+	wdt_timeout = 4 * 60 # all time-delta values are in int/float seconds
 	wdt_slack = 0.5 # added to push sleeps past their target
-	btn_debounce = 0.1 # ignore irq events within this time-delta
+	btn_debounce = 0.7 # ignore irq events within this time-delta
 
 	# Addrs are event id's that get sent over tty, stored in U/B bits (see below)
-	usb_hub_ports = dict( # pin=<n> addr=<n || pin>
-		hub1_port1=dict(pin=0), hub1_port2=dict(pin=1), hub1_port4=dict(pin=2) )
+	usb_hub_ports = dict( # pin=<n> (None=noop), addr=<n || pin>
+		hub1_port1=dict(pin=0), hub1_port2=dict(pin=1),
 		# hub1_port3= -- does not have a relay, not used here
-	button_pins = dict( # pin=<n> addr=<n || pin> trigger=<0/1>
-		btn1=dict(pin=3, addr=0, trigger=0) )
+		hub1_port4=dict(pin=2), init=dict(pin=5, addr=15) )
+	button_pins = dict( # pin=<n>, addr=<n || pin>, trigger=<0/1>
+		btn1=dict(pin=4, addr=0, trigger=0) )
 
 
 class USBPortState:
 
 	def __init__(self, port, addr, pin_n, wdt_timeout, log=None):
-		self.port, self.addr, self.pin_n, self.log = port, addr, pin_n, log
-		self.pin = machine.Pin(pin_n, machine.Pin.OUT, value=0)
+		self.pin_n, self.pin = ( ('-', None) if pin_n is None else
+			(pin_n, machine.Pin(pin_n, machine.Pin.OUT, value=0)) )
+		self.port, self.addr, self.log = port, addr, log
 		self.pin_st, self.wdt_ts = False, None
 		self.wdt_timeout = int(wdt_timeout * 1_000)
 
@@ -38,7 +40,7 @@ class USBPortState:
 
 	def set_state(self, enabled):
 		self.pin_st = bool(enabled)
-		self.pin.value(self.pin_st)
+		if self.pin: self.pin.value(self.pin_st)
 		if not self.pin_st: self.wdt_ts = None
 		self.log and self.log(f'{self} - state update')
 
