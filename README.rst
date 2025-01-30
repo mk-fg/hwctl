@@ -159,3 +159,43 @@ rp2040-usb-ppps script.
 .. _pyserial/pyserial-asyncio: https://github.com/pyserial/pyserial-asyncio
 .. _Older version: https://github.com/mk-fg/hwctl/blob/0e60923/hwctl.py
 .. _hwctl.ino: https://github.com/mk-fg/hwctl/blob/0e60923/hwctl.ino
+
+
+`nfc-sticker-actions`_
+----------------------
+.. _nfc-sticker-actions: nfc-sticker-actions.py
+
+Script to run configured commands from a simple `INI file`_ config
+(like `nfc-sticker-actions.example.ini`_) when an NFC tag/sticker
+(e.g. <$0.01 NTAG203/NTAG213 ISO14443 tags) with matching UID value
+is pressed to a reader pad.
+
+My use-case for this is sticking those cheap NTAGs on household chores/stuff
+that's easy to forget about (like a tube of toothpaste to brush teeth before sleep),
+and only snooze various notifications when that thing is tapped onto NFC-reader pad,
+making it more difficult to forget about it, as disabling notification requires
+holding damn thing in your hand already :)
+
+Should be combined with any kind of notification or control/signaling scripts
+(e.g. notify-send or timed-ble-beacon_ stuff) to actually do something notable
+on desktop/network or in the physical world via ``[action: ...]`` sections
+in the config file.
+
+Data stored in NFC tag sectors isn't actually read by this script,
+as it's enough to tell apart their unique-enough built-in UIDs for its purposes.
+
+Optionally integrates with hwctl_ script above, to activate NFC pad via button,
+so that it doesn't stay powered-on needlessly all the time (and start the script
+itself via systemd.path_ unit when needed).
+Cheap ACR122U pad I have draws ~300mA from USB, but likely also supports power
+management commands to do same thing without any extra usb-ppps hardware.
+
+Uses pyscard_ module for NFC reader communication, via `PCSC lite`_ on linux.
+
+.. _INI file: https://en.wikipedia.org/wiki/INI_file
+.. _nfc-sticker-actions.example.ini: nfc-sticker-actions.example.ini
+.. _timed-ble-beacon:
+  https://github.com/mk-fg/fgtk?tab=readme-ov-file#hdr-timed-ble-beacon
+.. _systemd.path: https://man.archlinux.org/man/systemd.path.5
+.. _pyscard: https://github.com/LudovicRousseau/pyscard
+.. _PCSC lite: https://pcsclite.apdu.fr/
