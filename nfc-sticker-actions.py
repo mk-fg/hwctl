@@ -36,13 +36,6 @@ def td_parse(td_str):
 		return sum(n*float(m) for n,m in zip((3600, 60, 1), td_str.split(':')))
 	raise ValueError(f'Failed to parse time-delta spec: {td_str}')
 
-err_fmt = lambda err: f'[{err.__class__.__name__}] {err}'
-
-class adict(dict):
-	def __init__(self, *args, **kws):
-		super().__init__(*args, **kws)
-		self.__dict__ = self
-
 def retries_within_timeout( tries, timeout,
 		backoff_func=lambda e,n: ((e**n-1)/(e*5)), slack=1e-2 ):
 	if tries <= 1 or timeout <= 0: return [0]
@@ -56,14 +49,20 @@ def retries_within_timeout( tries, timeout,
 		elif error > 0: b = m
 		else: a = m
 
-ev_t = enum.Enum('Ev', 'button reader exit cancel')
+class adict(dict):
+	def __init__(self, *args, **kws):
+		super().__init__(*args, **kws)
+		self.__dict__ = self
+
+err_fmt = lambda err: f'[{err.__class__.__name__}] {err}'
+ev_t = enum.Enum('Ev', 'button nfc exit cancel')
 ev_tuple = cs.namedtuple('Event', 't data', defaults=[None]*2)
 
 
 conf_defaults = adict(
 	hwctl = adict(
 		log_file = '',
-		log_tail_bytes = 10240,
+		log_tail_bytes = 1024,
 		log_time_slack = 30.0,
 		log_oserr_retry = 0.05,
 		fifo = '',
@@ -186,7 +185,7 @@ class INotify:
 				yield ev
 		return self.INotifyEvTracker(add, rm, ev_iter)
 
-async def log_tail(p, q, check_tail_bytes=10*2**10, oserr_delay=0.05):
+async def run_log_tail(p, q, check_tail_bytes=10*2**10, oserr_delay=0.05):
 	'''Put lines from specified log-path into queue as soon as they appear there.
 		Uses inotify on dir to detect changes, runs stat() inode-check before reads.'''
 	(inotify := INotify()).open(); inn_fd = log_file = log_ino = None
@@ -225,7 +224,7 @@ async def log_tail(p, q, check_tail_bytes=10*2**10, oserr_delay=0.05):
 def run_nfc_reader_loop(name, uid_cb, times):
 	'''Intended to be run in its own thread, using call_soon_threadsafe in uid_cb.
 		uid_cb is called with None or Exception when function terminates.
-		times=adict(td=td, ts_done=ts_mono) intended to be externally-mutable.'''
+		times=adict(td=td, ts_done=ts_mono, ...) intended to be externally-mutable.'''
 	try: _run_nfc_reader_loop(name, uid_cb, times)
 	except Exception as err: uid_cb(err)
 	else: uid_cb(None)
@@ -320,7 +319,7 @@ async def run(conf):
 			target=run_nfc_reader_loop, args=(conf.main.reader_name, cb, nfc_times) )
 		nfc_thread.start()
 	tasks.add(asyncio.create_task(
-		evq_wrapper(ev_t.reader, nfcq, evq), name='nfc_queue' ))
+		evq_wrapper(ev_t.nfc, nfcq, evq), name='nfc_queue' ))
 
 	for sig in 'INT', 'TERM': loop.add_signal_handler(
 		getattr(signal, f'SIG{sig}'), lambda _sig=sig: (
@@ -328,7 +327,7 @@ async def run(conf):
 
 	if conf.hwctl.log_file:
 		btnq = asyncio.Queue()
-		tasks.add(asyncio.create_task(log_tail(
+		tasks.add(asyncio.create_task(run_log_tail(
 			pl.Path(conf.hwctl.log_file), btnq,
 			check_tail_bytes=conf.hwctl.log_tail_bytes,
 			oserr_delay=conf.hwctl.log_oserr_retry ), name='btns_log'))
@@ -343,7 +342,7 @@ async def run(conf):
 		done, tasks = await asyncio.wait(
 			tasks, return_when=asyncio.FIRST_COMPLETED )
 		for tt in done:
-			task, ev = tt.get_name(), None
+			task = tt.get_name()
 			try: ev = await tt
 			except asyncio.CancelledError: ev = ev_t.cancel
 			log.debug('Loop: %s/%s %s', task, len(tasks), ev or '-')
@@ -364,23 +363,23 @@ async def run(conf):
 						asyncio.to_thread(fifo_send, conf.hwctl.fifo, cmds), name='fifo' ))
 				nfc_start()
 
-			elif ev.t is ev_t.reader:
-				if ev.data is None:
+			elif ev.t is ev_t.nfc:
+				if ev.data is None: # clean exit
 					if cmds := conf.hwctl.fifo_disable: tasks.add(asyncio.create_task(
 						asyncio.to_thread(fifo_send, conf.hwctl.fifo, cmds), name='fifo' ))
 					exit_task_bump(); continue
 				elif isinstance(ev.data, Exception):
 					log.error('NFC: reader failure - %s', err_fmt(ev.data))
 					exit_task_bump(); continue
-				nfc_uid = ev.data.lower()
+				nfc_uid, nfc_uid_found = ev.data.lower(), False
 				for act in conf.actions.values():
-					if act.uid == nfc_uid: break
-				else: log.debug('NFC: no action for UID - %s', nfc_uid); continue
-				tasks.add(asyncio.create_task(run_proc(
-					act.name, act.run, act.get('stdin'), act.get('stop_timeout') ), name='act'))
-				exit_task_bump()
+					if act.uid != nfc_uid: continue
+					tasks.add(asyncio.create_task(run_proc(
+						act.name, act.run, act.get('stdin'), act.get('stop_timeout') ), name='act'))
+					exit_task_bump(); nfc_uid_found = True
+				if not nfc_uid_found: log.debug('NFC: no action for UID - %s', nfc_uid)
 
-			elif ev.t is ev_t.exit: running = log.debug('Loop: exiting')
+			elif ev.t is ev_t.exit: log.debug('Loop: exiting'); running = False
 
 	log.debug('Loop: finished')
 	for tt in tasks:
