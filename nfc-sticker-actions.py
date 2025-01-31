@@ -274,26 +274,30 @@ async def run_log_tail(p, cb, tail_bytes=10*2**10, oserr_delay=0.05):
 		inotify.close()
 
 
-async def run_proc(name, cmd, stdin, timeout, kill_delay=2.0):
+async def proc_cleanup(proc, log_prefix, kill_delay=2.0):
+	if not proc: return
+	log_fn = lambda msg,*a: log.debug(f'%s {msg}', log_prefix, *a)
+	if (n := proc.returncode) is not None: return log_fn('exited (code=%s)', n)
+	try:
+		try: proc.terminate()
+		except OSError: pass
+		async with asyncio.timeout(kill_delay): await proc.wait()
+	except asyncio.TimeoutError: pass
+	finally:
+		if proc.returncode is not None: return log_fn('terminated')
+		try: proc.kill(); log_fn('killed')
+		except OSError: pass
+
+async def run_action(name, cmd, stdin, timeout, kill_delay=2.0):
 	proc, pre = None, f'[action {name}]'
 	try:
 		async with asyncio.timeout(timeout or 2**32):
 			proc = await asyncio.create_subprocess_exec(
 				*cmd, stdin=sp.PIPE if stdin else None )
 			if stdin: await proc.communicate(stdin.encode())
-	except asyncio.CancelledError: pass
 	except asyncio.TimeoutError: log.debug('%s Process timed out', pre)
 	except Exception as err: log.error('%s Failed with error: %s', pre, err_fmt(err))
-	if not proc: return
-	if (n := proc.returncode) is not None:
-		return log.debug('%s Process exited (code=%s)', pre, n)
-	try:
-		try:
-			async with asyncio.timeout(kill_delay): proc.terminate(); await proc.wait()
-		except asyncio.TimeoutError: proc.kill()
-	except OSError: pass
-	log.debug('%s Process terminated', pre)
-
+	finally: await proc_cleanup(proc, f'{pre} Process')
 
 async def run_reader(name, cb, proc_info, times, kill_delay=2.0):
 	proc, pre, log_fns = None, f'[nfc]', dict(enumerate([log.debug, log.error]))
@@ -306,17 +310,8 @@ async def run_reader(name, cb, proc_info, times, kill_delay=2.0):
 		while (line := await proc.stdout.readline()):
 			if not (log_fn := log_fns.get(line[0])): cb(line.decode().strip())
 			else: log_fn('[nfc] ' + line[1:].decode().strip())
-	except asyncio.CancelledError: pass
 	except Exception as err: log.error('%s subproc failed: %s', pre, err_fmt(err))
-	if not proc: return
-	if (n := proc.returncode) is not None:
-		return log.debug('%s subproc exited (code=%s)', pre, n)
-	try:
-		try:
-			async with asyncio.timeout(kill_delay): proc.terminate(); await proc.wait()
-		except asyncio.TimeoutError: proc.kill()
-	except OSError: pass
-	log.debug('%s subproc terminated', pre)
+	finally: await proc_cleanup(proc, f'{pre} subproc')
 
 
 async def run(conf):
@@ -326,15 +321,6 @@ async def run(conf):
 	def task_new(**named_task):
 		(name, coro), = named_task.items()
 		tasks.add(tt := asyncio.create_task(coro, name=name)); return tt
-
-	def exit_task_bump():
-		nonlocal exit_task
-		if not task_done(exit_task): exit_task.cancel(); exit_task = None
-		if not task_done(nfc_task): return
-		if any(tt.get_name() in ['act', 'fifo'] for tt in tasks): return
-		if (td := conf.main.exit_timeout) > 0:
-			log.debug('exit: scheduled in %ss', td)
-			exit_task = task_new(exit=asyncio.sleep(td))
 
 	async def fifo_send(p, cmds, timeout=2.0):
 		log.debug('hwctl: fifo command(s) - %s', cmds)
@@ -363,19 +349,33 @@ async def run(conf):
 		except asyncio.TimeoutError: _log_err('write timeout')
 		finally: os.close(fd)
 
-	nfc_proc = adict()
+	nfc_task_proc = adict()
 	def nfc_start():
-		nonlocal nfc_task
-		if not task_done(nfc_task) and (pid := nfc_proc.get('pid')):
+		nonlocal nfc_task, nfc_task_proc
+		if not task_done(nfc_task) and (pid := nfc_task_proc.get('pid')):
 			try: return os.kill(pid, signal.SIGHUP)
 			except OSError: return
-		exit_task_bump()
-		task_new(reader=run_reader(
+		nfc_task = task_new(reader=run_reader(
 			conf.main.reader_name, lambda ev: evq.put_nowait(dict(nfc=ev)),
-			nfc_proc, times=adict( td=conf.main.reader_timeout,
+			nfc_task_proc := adict(), times=adict(
+				td=conf.main.reader_timeout,
 				td_warmup=conf.main.reader_warmup,
 				td_warmup_checks=conf.main.reader_warmup_checks )))
 		log.debug('NFC: started reader subprocess')
+		exit_task_update()
+
+	exit_task_ts = None
+	def exit_task_update():
+		nonlocal exit_task, exit_task_ts
+		if ( not task_done(nfc_task)
+				or any(tt.get_name() in ['act', 'fifo'] for tt in tasks) ):
+			if exit_task_ts: log.debug('exit: cancelled')
+			exit_task_ts = None; return
+		if (td := conf.main.exit_timeout) <= 0: return
+		if exit_task_ts:
+			if (td := exit_task_ts - time.monotonic()) <= 0: return evq.put_nowait(None)
+		else: exit_task_ts = time.monotonic() + td; log.debug('exit: scheduled in %ss', td)
+		if task_done(exit_task): exit_task = task_new(exit=asyncio.sleep(td))
 
 	for sig in 'INT', 'TERM': loop.add_signal_handler(
 		getattr(signal, f'SIG{sig}'), lambda _sig=sig: (
@@ -385,7 +385,7 @@ async def run(conf):
 		task_new(btns_log=run_log_tail(
 			pl.Path(conf.hwctl.log_file), lambda ev: evq.put_nowait(dict(btn=ev)),
 			tail_bytes=conf.hwctl.log_tail_bytes, oserr_delay=conf.hwctl.log_oserr_retry ))
-		exit_task_bump()
+		exit_task_update()
 	else: nfc_start()
 
 	running = True
@@ -394,13 +394,10 @@ async def run(conf):
 		done, tasks = await asyncio.wait(
 			tasks, return_when=asyncio.FIRST_COMPLETED )
 		for tt in done:
-			task = tt.get_name()
-			try: ev = await tt
-			except asyncio.CancelledError: continue
+			task, ev = tt.get_name(), await tt
 			log.debug('Loop: %s/%s %s', task, len(tasks), ev or '-')
-			if task == 'exit': ev = None
-			elif task == 'reader': ev = dict(nfc=StopIteration)
-			elif task in ['act', 'fifo']: exit_task_bump(); continue
+			if task == 'reader': ev = dict(nfc_done=True)
+			elif task in ['act', 'fifo', 'exit']: exit_task_update(); continue
 			elif task != 'ev': raise RuntimeError(f'Daemon task failed: {task}')
 			if not ev: running = log.debug('Loop: exiting'); continue
 
@@ -414,17 +411,18 @@ async def run(conf):
 				nfc_start()
 
 			elif nfc_uid := ev.get('nfc'):
-				if nfc_uid is StopIteration:
-					if cmds := conf.hwctl.fifo and conf.hwctl.fifo_disable:
-						task_new(fifo=fifo_send(conf.hwctl.fifo, cmds))
-					exit_task_bump(); continue
 				nfc_uid, nfc_uid_found = nfc_uid.lower(), False
 				for act in conf.actions.values():
 					if act.uid != nfc_uid: continue
-					task_new(act=run_proc( act.name,
+					task_new(act=run_action( act.name,
 						act.run, act.get('stdin'), act.get('stop_timeout') ))
 					nfc_uid_found = True
 				if not nfc_uid_found: log.debug('NFC: no action for UID - %s', nfc_uid)
+
+			elif ev.get('nfc_done'):
+				if cmds := conf.hwctl.fifo and conf.hwctl.fifo_disable:
+					task_new(fifo=fifo_send(conf.hwctl.fifo, cmds))
+				exit_task_update()
 
 	log.debug('Loop: finished')
 	for tt in tasks:
