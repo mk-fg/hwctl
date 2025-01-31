@@ -133,7 +133,7 @@ async def run(events, dev, btns, sigs, init_cmds, daemon_tasks=None):
 				for q in btns: q.put_nowait(ev.msg)
 
 
-async def fifo_read_loop(p, queue):
+async def fifo_read_loop(p, mode, queue):
 	'Reads space-separated cmds from speficied fifo path into queue'
 	buff = eof = None
 	def _ev():
@@ -148,11 +148,12 @@ async def fifo_read_loop(p, queue):
 	try_mkfifo, loop = True, asyncio.get_running_loop()
 	while True:
 		if try_mkfifo:
-			try: try_mkfifo = os.mkfifo(p)
+			try: try_mkfifo = os.mkfifo(p, mode or 0o666)
 			except FileExistsError: pass
+			if mode: p.chmod(mode, follow_symlinks=False)
 		try: fd = os.open(p, os.O_RDONLY | os.O_NONBLOCK)
 		except FileNotFoundError: try_mkfifo = True; continue
-		if not stat.S_ISFIFO(os.fstat(fd).st_mode):
+		if not stat.S_ISFIFO(os.stat(fd).st_mode):
 			os.close(fd); p.unlink(missing_ok=True); try_mkfifo = True; continue
 		with open(fd, 'rb') as src:
 			buff, eof = b'', asyncio.Future()
@@ -200,8 +201,9 @@ def main(args=None):
 		help='tty device node for communicating with an mcu board. Default: %(default)s')
 	parser.add_argument('-b', '--baud-rate', metavar='rate', default=115200,
 		help='Baud rate for tty device communication. Default: %(default)s')
-	parser.add_argument('-f', '--control-fifo', metavar='path', help=dd('''
+	parser.add_argument('-f', '--control-fifo', metavar='path[:mode]', help=dd('''
 		Path to create fifo to read control commands from, space/line-separated.
+		Optional octal mode-suffix can be added to chmod fifo, e.g.: -f ctl.fifo:660
 		Supported commands (X=0-15): usbX=on, usbX=off, usbX=wdt.'''))
 	parser.add_argument('-s', '--control-signal', metavar='sig=cmd', action='append', help=dd('''
 		Interprets specified unix signal(s) as -f/--control-fifo commands.
@@ -269,7 +271,8 @@ def main(args=None):
 			file_logger_loop((p := pl.Path(p).expanduser()), q, **kws) )
 
 	if opts.control_fifo:
-		tasks['fifo'] = fifo_read_loop(pl.Path(opts.control_fifo), events)
+		fifo, _, mode = opts.control_fifo.rpartition(':')
+		tasks['fifo'] = fifo_read_loop(pl.Path(fifo), int(mode or '0', 8), events)
 
 	with cl.ExitStack() as ctx:
 		if pid := opts.pid_file and pl.Path(opts.pid_file):

@@ -322,7 +322,7 @@ async def run(conf):
 				while not eof.done(): _send()
 			else:
 				try:
-					with asyncio.timeout(timeout): await eof
+					async with asyncio.timeout(timeout): await eof
 				finally: loop.remove_writer(fd)
 		except asyncio.TimeoutError: _log_err('write timeout')
 		finally: os.close(fd)
