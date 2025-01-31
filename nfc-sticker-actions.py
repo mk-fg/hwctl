@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 
 import ctypes as ct, collections as cs, pathlib as pl, subprocess as sp
-import os, sys, re, logging, time, signal, string, enum
+import os, sys, re, logging, time, signal, errno
 import asyncio, configparser, struct, fcntl, termios
 
 # https://github.com/LudovicRousseau/pyscard
@@ -55,8 +55,6 @@ class adict(dict):
 		self.__dict__ = self
 
 err_fmt = lambda err: f'[{err.__class__.__name__}] {err}'
-ev_t = enum.Enum('Ev', 'button nfc exit cancel')
-ev_tuple = cs.namedtuple('Event', 't data', defaults=[None]*2)
 
 
 conf_defaults = adict(
@@ -81,8 +79,8 @@ def conf_parse_ini(p):
 	(parser := configparser.ConfigParser(
 		default_section='', allow_no_value=True, interpolation=None )).read(p)
 	ck_map = {'hwctl-reader-control': conf.hwctl, 'main': conf.main}
-	conf_warn = lambda: log.warning(
-		'[conf] Unused config value [ %s ]: [%s] %s = %s', p, ck, sk, sv )
+	pre, conf_warn = f'[conf {p.name}]', lambda: log.warning(
+		'%s Unused config value: [%s] %s = %s', pre, ck, sk, sv )
 	for ck, sec in parser.items():
 		if c := ck_map.get(ck):
 			for sk, sv in sec.items():
@@ -92,7 +90,7 @@ def conf_parse_ini(p):
 		elif (m := re.match(r'action:\s+(.*)', ck)) and (ak := m[1]):
 			act = conf.actions[ak] = adict(name=ak)
 			for sk, sv in sec.items():
-				if sk == 'uid': sv = ''.join(c for c in sv if c in string.hexdigits).lower()
+				if sk == 'uid': sv = ''.join(c for c in sv if c in '0123456789abcdefABCDEF').lower()
 				elif sk == 'run': sv = list( # '...' - arg with spaces and ''-escapes
 					s.replace('\uf43b', '').replace('\uea3a', ' ') for s in re.sub(
 						r"'(.*?)'", lambda m: m[1].replace(' ', '\uea3a').replace('\uf43b', "'"),
@@ -101,16 +99,16 @@ def conf_parse_ini(p):
 				elif sk == 'stop-timeout': sv = td_parse(sv)
 				else: conf_warn(); continue
 				act[sk.replace(*'-_')] = sv
-			if not (act.get('uid') and act.get('run')): log.warning( '[conf]'
-				' Ignoring action section without uid/run values [ %s ]: [%s]', p, ck )
-		elif ck: log.warning('[conf] Unused config section [ %s ]: [%s]', p, ck)
+			if not (act.get('uid') and act.get('run')): log.warning(
+				'%s Ignoring action section without uid/run values: [%s]', pre, ck )
+		elif ck: log.warning('%s Unused config section: [%s]', pre, ck)
 	if cmds := conf.hwctl.fifo_enable_btns.split():
 		btn_map = conf.hwctl.fifo_enable_btns = dict()
 		for spec in cmds:
 			try:
 				n, cmd = spec.split(':', 1)
 				btn_map.setdefault(int(n), list()).append(cmd)
-			except: log.warning('[conf] Incorrect fifo-enable-btns spec [ %s ]: %s', p, spec)
+			except: log.warning('%s Incorrect fifo-enable-btns spec: %s', pre, spec)
 	if cmds := conf.hwctl.fifo_disable.split(): conf.hwctl.fifo_disable = cmds
 	return conf
 
@@ -185,8 +183,8 @@ class INotify:
 				yield ev
 		return self.INotifyEvTracker(add, rm, ev_iter)
 
-async def run_log_tail(p, q, check_tail_bytes=10*2**10, oserr_delay=0.05):
-	'''Put lines from specified log-path into queue as soon as they appear there.
+async def run_log_tail(p, cb, tail_bytes=10*2**10, oserr_delay=0.05):
+	'''Send lines from specified log-path to callback as soon as they appear there.
 		Uses inotify on dir to detect changes, runs stat() inode-check before reads.'''
 	(inotify := INotify()).open(); inn_fd = log_file = log_ino = None
 	try:
@@ -198,7 +196,7 @@ async def run_log_tail(p, q, check_tail_bytes=10*2**10, oserr_delay=0.05):
 				except OSError: await asyncio.sleep(oserr_delay) # rotation/chmod
 			else: continue
 			if log_file and ino != log_ino:
-				while line := log_file.readline(): q.put_nowait(line.decode().strip())
+				while line := log_file.readline(): cb(line.decode().strip())
 				log_file = log_ino = log_file.close()
 			if not log_file:
 				for n in range(3):
@@ -207,14 +205,14 @@ async def run_log_tail(p, q, check_tail_bytes=10*2**10, oserr_delay=0.05):
 				else:
 					log.warning('Failed to open log-file [ %s ]: %s', p, err_fmt(log_err))
 					continue
-				if check_tail_bytes:
+				if tail_bytes:
 					try:
-						log_file.seek(-check_tail_bytes, os.SEEK_END)
+						log_file.seek(-tail_bytes, os.SEEK_END)
 						if log_file.tell() != 0: log_file.readline() # to next complete line
-					except OSError: pass # smaller than check_tail_bytes
-					check_tail_bytes = None # skip for new files
+					except OSError: pass # smaller than tail_bytes
+					tail_bytes = None # skip for new files
 				log_ino = os.stat(log_file.fileno()).st_ino
-			while line := log_file.readline(): q.put_nowait(line.decode().strip())
+			while line := log_file.readline(): cb(line.decode().strip())
 	finally:
 		if log_file: log_file.close()
 		if inn_fd is not None: inn.rm(inn_fd)
@@ -223,11 +221,11 @@ async def run_log_tail(p, q, check_tail_bytes=10*2**10, oserr_delay=0.05):
 
 def run_nfc_reader_loop(name, uid_cb, times):
 	'''Intended to be run in its own thread, using call_soon_threadsafe in uid_cb.
-		uid_cb is called with None or Exception when function terminates.
+		uid_cb is called with StopIteration or Exception when function terminates.
 		times=adict(td=td, ts_done=ts_mono, ...) intended to be externally-mutable.'''
 	try: _run_nfc_reader_loop(name, uid_cb, times)
 	except Exception as err: uid_cb(err)
-	else: uid_cb(None)
+	else: uid_cb(StopIteration)
 
 def _run_nfc_reader_loop(name, uid_cb, times):
 	readers_seen = set()
@@ -265,7 +263,7 @@ def _run_nfc_reader_loop(name, uid_cb, times):
 		else: times.ts_done = time.monotonic() + times.td; uid_cb(bytes(data).hex())
 
 
-async def run_proc(name, cmd, stdin, timeout, kill_timeout=2.0):
+async def run_proc(name, cmd, stdin, timeout, kill_delay=2.0):
 	proc, pre = None, f'[action {name}]'
 	try:
 		async with asyncio.timeout(timeout or 2**32):
@@ -279,7 +277,7 @@ async def run_proc(name, cmd, stdin, timeout, kill_timeout=2.0):
 		return log.debug('%s Process exited (code=%s)', pre, n)
 	try:
 		proc.terminate()
-		async with asyncio.timeout(kill_timeout): await proc.wait()
+		async with asyncio.timeout(kill_delay): await proc.wait()
 		if proc.returncode is None: proc.kill()
 	except OSError: pass
 	log.debug('%s Process terminated', pre)
@@ -289,6 +287,9 @@ async def run(conf):
 	tasks, evq, loop = set(), asyncio.Queue(), asyncio.get_running_loop()
 	evq_task = exit_task = nfc_thread = None
 	task_done = lambda tt: not tt or tt.done()
+	def task_new(**named_task):
+		(name, coro), = named_task.items()
+		tasks.add(tt := asyncio.create_task(coro, name=name)); return tt
 
 	def exit_task_bump():
 		nonlocal exit_task
@@ -297,14 +298,36 @@ async def run(conf):
 		if any(tt.get_name() in ['act', 'fifo'] for tt in tasks): return
 		if (td := conf.main.exit_timeout) > 0:
 			log.debug('exit: scheduled in %ss', td)
-			tasks.add(exit_task := asyncio.create_task(asyncio.sleep(td), name='exit'))
-	def fifo_send(p, cmds):
-		with open(p, 'w') as fifo:
-			for cmd in cmds: fifo.write(f'{cmd}\n')
-	async def evq_wrapper(ev, q, evq):
-		while True: evq.put_nowait(ev_tuple(ev, await q.get()))
+			exit_task = task_new(exit=asyncio.sleep(td))
 
-	nfcq, nfc_times = asyncio.Queue(), adict(
+	async def fifo_send(p, cmds, timeout=2.0):
+		log.debug('hwctl: fifo command(s) - %s', cmds)
+		eof, buff = asyncio.Future(), ''.join(f'{c}\n' for c in cmds).encode()
+		_log_err = lambda msg: log.error( 'hwctl: fifo %s [ %s ]',
+			msg, repr(buff) if len(buff) > 20 else repr(buff[:17])[:-1] + '...' )
+		def _send():
+			nonlocal buff
+			try:
+				if (n := os.write(fd, buff)) <= 0: raise OSError
+			except OSError: return eof.set_result(_log_err('write failed'))
+			if not (buff := buff[n:]): eof.set_result(None)
+		try: fd = os.open(p, os.O_WRONLY | os.O_NONBLOCK)
+		except OSError as err:
+			if err.errno not in [errno.ENXIO, errno.ENOENT]: raise
+			log.error('hwctl: no fifo path/reader [ %s ]', p); return
+		try:
+			try: loop.add_writer(fd, _send)
+			except OSError:
+				log.debug('hwctl: fifo blocking write')
+				while not eof.done(): _send()
+			else:
+				try:
+					with asyncio.timeout(timeout): await eof
+				finally: loop.remove_writer(fd)
+		except asyncio.TimeoutError: _log_err('write timeout')
+		finally: os.close(fd)
+
+	nfc_times = adict(
 		td=conf.main.reader_timeout,
 		td_warmup=conf.main.reader_warmup,
 		td_warmup_checks=conf.main.reader_warmup_checks )
@@ -314,72 +337,61 @@ async def run(conf):
 		nfc_times.ts_done = time.monotonic() + nfc_times.td
 		if not task_done(exit_task): exit_task.cancel(); exit_task = None
 		if nfc_thread and nfc_thread.is_alive(): return
-		cb = lambda ev: loop.call_soon_threadsafe(nfcq.put_nowait, ev)
+		cb = lambda ev: loop.call_soon_threadsafe(evq.put_nowait, dict(nfc=ev))
 		nfc_thread = threading.Thread( name='nfc_reader_loop', daemon=True,
 			target=run_nfc_reader_loop, args=(conf.main.reader_name, cb, nfc_times) )
-		nfc_thread.start()
-	tasks.add(asyncio.create_task(
-		evq_wrapper(ev_t.nfc, nfcq, evq), name='nfc_queue' ))
+		log.debug('NFC: started reader loop'); nfc_thread.start()
 
 	for sig in 'INT', 'TERM': loop.add_signal_handler(
 		getattr(signal, f'SIG{sig}'), lambda _sig=sig: (
-			log.debug('Exiting on signal %s', _sig), evq.put_nowait(ev_tuple(ev_t.exit)) ) )
+			log.debug('Exiting on signal %s', _sig), evq.put_nowait(None) ) )
 
 	if conf.hwctl.log_file:
-		btnq = asyncio.Queue()
-		tasks.add(asyncio.create_task(run_log_tail(
-			pl.Path(conf.hwctl.log_file), btnq,
-			check_tail_bytes=conf.hwctl.log_tail_bytes,
-			oserr_delay=conf.hwctl.log_oserr_retry ), name='btns_log'))
-		tasks.add(asyncio.create_task(
-			evq_wrapper(ev_t.button, btnq, evq), name='btns_queue' ))
+		cb = lambda ev: evq.put_nowait(dict(btn=ev))
+		task_new(btns_log=run_log_tail( pl.Path(conf.hwctl.log_file), cb,
+			tail_bytes=conf.hwctl.log_tail_bytes, oserr_delay=conf.hwctl.log_oserr_retry ))
+		exit_task_bump()
 	else: nfc_start()
 
-	running = True; exit_task_bump()
+	running = True
 	while running:
-		if task_done(evq_task): tasks.add(
-			evq_task := asyncio.create_task(evq.get(), name='ev') )
+		if task_done(evq_task): evq_task = task_new(ev=evq.get())
 		done, tasks = await asyncio.wait(
 			tasks, return_when=asyncio.FIRST_COMPLETED )
 		for tt in done:
 			task = tt.get_name()
 			try: ev = await tt
-			except asyncio.CancelledError: ev = ev_t.cancel
+			except asyncio.CancelledError: continue
 			log.debug('Loop: %s/%s %s', task, len(tasks), ev or '-')
-			if task == 'exit':
-				if ev is ev_t.cancel: continue
-				else: evq.put_nowait(ev_tuple(ev_t.exit)); continue
-			elif task in ['fifo', 'act']: exit_task_bump(); continue
+			if task == 'exit': ev = None
+			elif task in ['act', 'fifo']: exit_task_bump(); continue
 			elif task != 'ev': raise RuntimeError(f'Daemon task failed: {task}')
+			if not ev: running = log.debug('Loop: exiting'); continue
 
-			if ev.t is ev_t.button:
-				try: btn_ts, btn = ev.data.split(None, 2); btn_ts, btn = (
+			if line := ev.get('btn'):
+				try: btn_ts, btn = line.split(None, 2); btn_ts, btn = (
 					float(btn_ts), int((m := re.fullmatch(r'btn=(\d+)', btn)) and m[1] or 0) )
-				except: log.debug('hwctl: unrecognized btn-log line [ %s ]', ev.data); continue
+				except: log.debug('hwctl: unrecognized btn-log line [ %s ]', line); continue
 				if time.time() - btn_ts > conf.hwctl.log_time_slack: continue
 				if cmds := conf.hwctl.fifo_enable_btns.get(btn):
-					log.debug('hwctl: fifo command(s) - %s', cmds)
-					tasks.add(asyncio.create_task(
-						asyncio.to_thread(fifo_send, conf.hwctl.fifo, cmds), name='fifo' ))
+					task_new(fifo=fifo_send(conf.hwctl.fifo, cmds))
 				nfc_start()
 
-			elif ev.t is ev_t.nfc:
-				if ev.data is None: # clean exit
-					if cmds := conf.hwctl.fifo_disable: tasks.add(asyncio.create_task(
-						asyncio.to_thread(fifo_send, conf.hwctl.fifo, cmds), name='fifo' ))
-					exit_task_bump(); continue
-				elif isinstance(ev.data, Exception):
-					log.error('NFC: reader failure - %s', err_fmt(ev.data))
-					exit_task_bump(); continue
-				nfc_uid, nfc_uid_found = ev.data.lower(), False
-				for act in conf.actions.values():
-					if act.uid != nfc_uid: continue
-					tasks.add(asyncio.create_task(run_proc(
-						act.name, act.run, act.get('stdin'), act.get('stop_timeout') ), name='act'))
-					exit_task_bump(); nfc_uid_found = True
-				if not nfc_uid_found: log.debug('NFC: no action for UID - %s', nfc_uid)
-
-			elif ev.t is ev_t.exit: log.debug('Loop: exiting'); running = False
+			elif nfc_ev := ev.get('nfc'):
+				if nfc_ev is StopIteration: # clean exit
+					if cmds := conf.hwctl.fifo_disable:
+						task_new(fifo=fifo_send(conf.hwctl.fifo, cmds))
+				elif isinstance(nfc_ev, Exception):
+					log.error('NFC: reader failure - %s', err_fmt(nfc_ev))
+				else:
+					nfc_uid, nfc_uid_found = nfc_ev.lower(), False
+					for act in conf.actions.values():
+						if act.uid != nfc_uid: continue
+						task_new(act=run_proc( act.name,
+							act.run, act.get('stdin'), act.get('stop_timeout') ))
+						nfc_uid_found = True
+					if not nfc_uid_found: log.debug('NFC: no action for UID - %s', nfc_uid)
+				exit_task_bump()
 
 	log.debug('Loop: finished')
 	for tt in tasks:

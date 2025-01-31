@@ -157,8 +157,8 @@ async def fifo_read_loop(p, queue):
 		with open(fd, 'rb') as src:
 			buff, eof = b'', asyncio.Future()
 			loop.add_reader(fd, _ev)
-			await eof
-			loop.remove_reader(fd)
+			try: await eof
+			finally: loop.remove_reader(fd)
 
 async def file_logger_loop(p, queue, buttons=None, mode=0, max_bytes=0, bak_count=1):
 	'Append button-press lines to auto-rotated file from a queue of (ts, btn_n) tuples.'
