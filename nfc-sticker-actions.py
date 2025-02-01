@@ -80,7 +80,7 @@ if __name__ == '__main__' and (
 
 ### Part 2/2 - Main asyncio-loop process
 
-import ctypes as ct, collections as cs, pathlib as pl, subprocess as sp
+import ctypes as ct, collections as cs, contextlib as cl, pathlib as pl, subprocess as sp
 import re, logging, struct, fcntl, termios, errno, asyncio, configparser
 
 
@@ -211,10 +211,9 @@ class INotify:
 			n += self._INotifyEv.size
 			name = ct.c_buffer(buff[n:n + name_len], name_len).value.decode()
 			n += name_len
-			try:
+			with cl.suppress(KeyError): # after rm_watch or IN_Q_OVERFLOW (wd=-1)
 				path, mask, queue = self.wd_info[wd]
 				queue.put_nowait(self.INotifyEv(path, mask, wd, flags, cookie, name))
-			except KeyError: pass # after rm_watch or IN_Q_OVERFLOW (wd=-1)
 		if n != bs: log.warning(
 			'Unused trailing bytes on inotify-fd [%s]: %s',
 			(bs := bs - n), ct.c_buffer(buff[n:], bs).value )
@@ -261,10 +260,9 @@ async def run_log_tail(p, cb, tail_bytes=10*2**10, oserr_delay=0.05):
 					log.warning('Failed to open log-file [ %s ]: %s', p, err_fmt(log_err))
 					continue
 				if tail_bytes:
-					try:
+					with cl.suppress(OSError): # file < tail_bytes
 						log_file.seek(-tail_bytes, os.SEEK_END)
 						if log_file.tell() != 0: log_file.readline() # to next complete line
-					except OSError: pass # smaller than tail_bytes
 					tail_bytes = None # skip for new files
 				log_ino = os.stat(log_file.fileno()).st_ino
 			while line := log_file.readline(): cb(line.decode().strip())
@@ -279,14 +277,13 @@ async def proc_cleanup(proc, log_prefix, kill_delay=2.0):
 	log_fn = lambda msg,*a: log.debug(f'%s {msg}', log_prefix, *a)
 	if (n := proc.returncode) is not None: return log_fn('exited (code=%s)', n)
 	try:
-		try: proc.terminate()
-		except OSError: pass
+		with cl.suppress(OSError): proc.terminate()
 		async with asyncio.timeout(kill_delay): await proc.wait()
 	except asyncio.TimeoutError: pass
 	finally:
-		if proc.returncode is not None: return log_fn('terminated')
-		try: proc.kill(); log_fn('killed')
-		except OSError: pass
+		if not (term := proc.returncode is not None):
+			with cl.suppress(OSError): term = proc.kill()
+		log_fn('terminated' if term else 'killed')
 
 async def run_action(name, cmd, stdin, timeout, kill_delay=2.0):
 	proc, pre = None, f'[action {name}]'
@@ -427,8 +424,7 @@ async def run(conf):
 	log.debug('Loop: finished')
 	for tt in tasks:
 		if task_done(tt): continue
-		try: tt.cancel(); await tt
-		except asyncio.CancelledError: pass
+		with cl.suppress(asyncio.CancelledError): tt.cancel(); await tt
 
 
 def main(args=None):
@@ -456,7 +452,6 @@ def main(args=None):
 	log = logging.getLogger('nsa')
 
 	conf = conf_parse_ini(pl.Path(opts.conf))
-	try: return asyncio.run(run(conf))
-	except asyncio.CancelledError: pass
+	with cl.suppress(asyncio.CancelledError): return asyncio.run(run(conf))
 
 if __name__ == '__main__': sys.exit(main())
