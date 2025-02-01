@@ -9,6 +9,7 @@ class HWCtlConf:
 	verbose = False
 	wdt_timeout = 4 * 60 # all time-delta values are in int/float seconds
 	wdt_slack = 0.5 # added to push sleeps past their target
+	btn_check = True # check state after irq to ignore more transient noise
 	btn_debounce = 0.7 # ignore irq events within this time-delta
 
 	# Addrs are event id's that get sent over tty, stored in U/B bits (see below)
@@ -61,22 +62,23 @@ class USBPortState:
 
 class GPIOButtonState:
 
-	def __init__(self, name, addr, pin_n, trigger, debounce_td, callback, log=None):
+	def __init__( self, name, addr,
+			pin_n, trigger, callback, debounce_td, debounce_check, log=None ):
+		Pin = machine.Pin
 		self.name, self.addr, self.pin_n, self.log = name, addr, pin_n, log
-		Pin, self.ts, self.debounce_td = machine.Pin, 0, int(debounce_td * 1_000)
 		pull, irq = ( (Pin.PULL_UP, Pin.IRQ_FALLING)
-			if not trigger else (Pin.PULL_UP, Pin.PULL_DOWN) )
-		self.trigger, self.cb, self.pin = trigger, callback, Pin(pin_n, Pin.IN, pull=pull)
+			if not trigger else (Pin.PULL_DOWN, Pin.IRQ_RISING) )
+		self.debounce = trigger if debounce_check else None, int(debounce_td * 1_000)
+		self.ts, self.trigger, self.cb, self.pin = 0, trigger, callback, Pin(pin_n, Pin.IN, pull=pull)
 		self.pin.irq(self.irq_handler, trigger=irq)
 
 	__repr__ = lambda s: f'<Button {s.name} #{s.addr}@{s.pin_n}={s.trigger}>'
 
 	def irq_handler(self, pin):
-		ts = time.ticks_ms()
-		if time.ticks_diff(ts, self.ts) < self.debounce_td: return
-		self.ts = ts
-		self.log and self.log(f'{self} - pressed')
-		self.cb(self.addr)
+		ts, (trigger, td) = time.ticks_ms(), self.debounce
+		if time.ticks_diff(ts, self.ts) < td: return
+		if trigger is not None and (self.pin.value() != trigger): return
+		self.ts = ts; self.log and self.log(f'{self} - pressed'); self.cb(self.addr)
 
 
 class HWCtl:
@@ -101,7 +103,7 @@ class HWCtl:
 		for btn, info in conf.button_pins.items():
 			pin_n = info['pin']; addr = info.get('addr', pin_n)
 			self.btns[btn] = GPIOButtonState( btn, addr, pin_n,
-				info['trigger'], conf.btn_debounce, btn_send, log=btn_log )
+				info['trigger'], btn_send, conf.btn_debounce, conf.btn_check, log=btn_log )
 
 		self.log and self.log( 'HWCtl init done:'
 			f' {len(self.usbs)} usb port(s), {len(self.btns)} button(s)' )
