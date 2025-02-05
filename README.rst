@@ -115,7 +115,7 @@ Also wrote-up some extended thoughts on this subject in a
 
 
 `rp2040-neopixels`_
-----------------------
+-------------------
 .. _rp2040-neopixels: rp2040-neopixels.py
 
 Script to display packed GIF pixel-art animation on a neopixel_ panel
@@ -125,6 +125,22 @@ visual reminders, from e.g. `nfc-sticker-actions`_ dispatcher.
 
 `gif-frames-pack`_ tool below can be used to compress animated GIFs
 into a couple lines of base64+zlib strings used in this script.
+
+One way to run the script on device connected over ttyACM without needing it
+locally and with any kind of configuration parameters, is to compile it
+using mpy-cross (also mentioned above), upload resulting mpy module file,
+and invoke it via ``mpremote exec`` with those parameters in there
+(instead of more usual ``mpremote run rp2040-neopixels.py``)::
+
+  % mpy-cross -march=armv6m -O2 rp2040-neopixels.py -o npx.mpy
+  % mpremote cp npx.mpy :
+  % mpremote exec --no-follow 'import npx; npx.run_with_times(td_total=10*60)'
+
+All time-delta "td" parameters in addition to a fixed value in seconds accept
+lists of TimeDeltaRNG tuples of (chance [0-1.0], td-min [s], td-max [s]),
+to roll the chance on each of these in same order until first success,
+and then uniformly pick td from min-max range. These values are randomly
+picked like that before every inteval/delay, so will vary within single run.
 
 .. _neopixel: https://docs.micropython.org/en/latest/library/neopixel.html
 .. _Waveshare Pico-RGB-LED: https://www.waveshare.com/wiki/Pico-RGB-LED
@@ -218,7 +234,7 @@ Uses pyscard_ module for NFC reader communication, via `PCSC lite`_ on linux.
 
 
 `gif-frames-pack`_
-----------------------
+------------------
 .. _gif-frames-pack: gif-frames-pack.py
 
 Helper script to efficiently pack GIF animation frames into an
@@ -226,12 +242,14 @@ easy-to-decode and relatively small sequential color arrays to
 display via neopixel_ LED matrices (e.g. N-by-M rectangle of WS2812 LEDs),
 via e.g. `rp2040-neopixels`_ script above.
 
-For example, compresses complicated and messy 2,621-byte 16x8 49-frame
-animated GIF format down to ~290 bytes, which are easy to embed into script
-as base64 blob and iterate/loop over.
+For example, it compresses complicated and messy 2,621-byte 16x8 49-frame
+animated GIF file down to ~290 bytes, which are much easier to embed into
+script as base64 blob and iterate/loop over in python code - moreso than
+raw GIF itself anyhow.
 
 Uses `pillow/PIL module`_ to get pixels from GIF frames and ImageMagick_
-command-line "magick" tool to get per-frame delays (not sure if PIL parses those).
+command-line "magick" tool to get per-frame delays (haven't found where PIL
+parses those to).
 
 .. _pillow/PIL module: https://pillow.readthedocs.io/
 .. _ImageMagick: https://imagemagick.org/

@@ -64,26 +64,29 @@ def draw_gif_anim( gif_b64, ox=0, oy=0,
 
 
 gifs = cs.namedtuple('GIFStage', 'b64 ox oy td')
-tdr = cs.namedtuple('TimeDeltaRNG', 'chance time_min time_max')
+tdr = cs.namedtuple('TimeDeltaRNG', 'chance td_min td_max')
 
 def tdr_ms(delay):
 	if isinstance(delay, (int, float)): return round(1000*delay)
 	for tdr in delay:
 		if random.random() > tdr.chance: continue
-		return round(1000*( tdr.time_min +
-			random.random() * (tdr.time_max - tdr.time_min) ))
+		return round(1000*( tdr.td_min +
+			random.random() * (tdr.td_max - tdr.td_min) ))
 	return 0
 
 def run(gif_loop, td_ack, td_post, td_sleep, **gif_kws):
 	c_ack, trails = (0, 20, 0), (1, 0.5, 0.2, 0.05)
+	dx, dy = random.random() > 0.5, random.random() > 0.5
 	for n in range(npw + len(trails) - 1):
 		np.fill(b'\0\0\0')
-		ny, nx = min(nph, round(n * nph/npw)), n
+		fx, fy = ( ( (lambda o,_nk=nk: _nk - o)
+				if d else (lambda n,_m=m,_nk=nk: _m - 1 - (_nk-o)) )
+			for d, nk, m in [(dx, n, npw), (dy, min(nph, round(n * nph/npw)), nph)] )
 		for o, k in reversed(list(enumerate(trails))):
 			c = tuple(round(c*k) for c in c_ack)
-			if npw > (n := nx-o) >= 0:
+			if npw > (n := fx(o)) >= 0:
 				for y in range(nph): np[y*npw + n] = c
-			if nph > (n := ny-o) >= 0:
+			if nph > (n := fy(o)) >= 0:
 				for x in range(npw): np[n*npw + x] = c
 		np.write(); time.sleep_ms(15)
 	np.fill(b'\0\0\0'); np.write(); time.sleep_ms(tdr_ms(td_ack))
@@ -98,9 +101,15 @@ def run(gif_loop, td_ack, td_post, td_sleep, **gif_kws):
 			if end: time.sleep_ms(tdr_ms(td_post)); break
 		np.fill(b'\0\0\0'); np.write()
 
-run(
-	td_ack=[tdr(0.5, 2, 5), tdr(1, 4, 9)],
-	gif_loop=gifs(gif_nyawn, ox=1, oy=3, td=3 * 60),
-	td_post=[tdr(0.5, 1, 2), tdr(0.9, 1.5, 4), tdr(1, 3, 6)],
-	td_sleep=[tdr(0.1, 0, 0), tdr(0.5, 6, 15), tdr(1, 8, 20)],
-	rgb_dim=(0.5, 0.035, 0.007) )
+def run_with_times( td_total=3 * 60,
+		td_ack=[tdr(0.5, 2, 5), tdr(1, 4, 9)],
+		td_post=[tdr(0.5, 1, 2), tdr(0.9, 1.5, 4), tdr(1, 3, 6)],
+		td_sleep=[tdr(0.1, 0, 0), tdr(0.5, 6, 15), tdr(1, 8, 20)] ):
+	td_make = lambda td: ( td if isinstance(td, (int, float))
+		else list((tdr(*tdt) if isinstance(tdt, tdr) else tdr) for tdt in td) )
+	run(
+		gif_loop=gifs(gif_nyawn, ox=1, oy=3, td=td_make(3 * 60)),
+		rgb_dim=(0.7, 0.02, 0.003), td_ack=td_make(td_ack),
+		td_post=td_make(td_post), td_sleep=td_make(td_sleep) )
+
+if __name__ == '__main__': run_with_times()
