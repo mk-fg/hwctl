@@ -114,6 +114,22 @@ Also wrote-up some extended thoughts on this subject in a
   https://blog.fraggod.net/2023/11/17/usb-hub-per-port-power-switching-done-right-with-a-couple-wires.html
 
 
+`rp2040-neopixels`_
+----------------------
+.. _rp2040-neopixels: rp2040-neopixels.py
+
+Script to display packed GIF pixel-art animation on a neopixel_ panel
+like `Waveshare Pico-RGB-LED`_ 16x10 WS2812 LED matrix, looping it with
+a random intervals a bunch of times. Intended to be used for flashy
+visual reminders, from e.g. `nfc-sticker-actions`_ dispatcher.
+
+`gif-frames-pack`_ tool below can be used to compress animated GIFs
+into a couple lines of base64+zlib strings used in this script.
+
+.. _neopixel: https://docs.micropython.org/en/latest/library/neopixel.html
+.. _Waveshare Pico-RGB-LED: https://www.waveshare.com/wiki/Pico-RGB-LED
+
+
 `hwctl`_
 --------
 .. _hwctl: hwctl.py
@@ -207,15 +223,15 @@ Uses pyscard_ module for NFC reader communication, via `PCSC lite`_ on linux.
 
 Helper script to efficiently pack GIF animation frames into an
 easy-to-decode and relatively small sequential color arrays to
-display via neopixel_ LED matrices (e.g. N-by-M rectangle of WS2812 LEDs).
+display via neopixel_ LED matrices (e.g. N-by-M rectangle of WS2812 LEDs),
+via e.g. `rp2040-neopixels`_ script above.
 
 For example, compresses complicated and messy 2,621-byte 16x8 49-frame
-animated GIF down to ~290 bytes, which are easy to embed into script as
-base64 blob and iterate/loop over.
+animated GIF format down to ~290 bytes, which are easy to embed into script
+as base64 blob and iterate/loop over.
 
 Uses `pillow/PIL module`_ to get pixels from GIF frames and ImageMagick_
 command-line "magick" tool to get per-frame delays (not sure if PIL parses those).
 
-.. _neopixel: https://docs.micropython.org/en/latest/library/neopixel.html
 .. _pillow/PIL module: https://pillow.readthedocs.io/
 .. _ImageMagick: https://imagemagick.org/

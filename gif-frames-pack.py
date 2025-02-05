@@ -99,9 +99,10 @@ def main(args=None):
 	pal.discard(0) # black is never used as color for leds
 	pal = dict((c, n) for n, c in enumerate(sorted(pal, key=lambda c: c != bgc)))
 
-	w, h, nf = 16, 8, len(img.frames)
+	w, h, nf = img.w, img.h, len(img.frames)
 	cb_pack = (cb := math.ceil(math.log2(cn := len(pal)))) < 5
-	p_info(f'Palette colors = {cn}, color-bits = {cb}, bg = {bgc:x}, pack = {cb_pack}')
+	p_info(f'GIF frames = {nf}, total duration = {sum(img.delays):,d} ms')
+	p_info(f'Palette colors = {cn}, color-bits = {cb}, bg = {bgc:x}, pack bits = {cb_pack}')
 
 	frames_enc = list()
 	for ms, frame in zip(img.delays, img.frames):
