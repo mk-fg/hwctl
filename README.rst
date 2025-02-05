@@ -199,3 +199,23 @@ Uses pyscard_ module for NFC reader communication, via `PCSC lite`_ on linux.
 .. _systemd.path: https://man.archlinux.org/man/systemd.path.5
 .. _pyscard: https://github.com/LudovicRousseau/pyscard
 .. _PCSC lite: https://pcsclite.apdu.fr/
+
+
+`gif-frames-pack`_
+----------------------
+.. _gif-frames-pack: gif-frames-pack.py
+
+Helper script to efficiently pack GIF animation frames into an
+easy-to-decode and relatively small sequential color arrays to
+display via neopixel_ LED matrices (e.g. N-by-M rectangle of WS2812 LEDs).
+
+For example, compresses complicated and messy 2,621-byte 16x8 49-frame
+animated GIF down to 217 bytes, which are easy to embed into script as base64
+blob and iterate/loop over.
+
+Uses `pillow/PIL module`_ to get pixels from GIF frames and ImageMagick_
+command-line "magick" tool to get per-frame delays (not sure if PIL parses those).
+
+.. _neopixel: https://docs.micropython.org/en/latest/library/neopixel.html
+.. _pillow/PIL module: https://pillow.readthedocs.io/
+.. _ImageMagick: https://imagemagick.org/

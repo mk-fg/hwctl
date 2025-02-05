@@ -64,12 +64,12 @@ class GPIOButtonState:
 
 	def __init__( self, name, addr,
 			pin_n, trigger, callback, debounce_td, debounce_check, log=None ):
-		Pin = machine.Pin
-		self.name, self.addr, self.pin_n, self.log = name, addr, pin_n, log
+		self.log, Pin = log, machine.Pin
+		self.name, self.addr, self.pin_n, self.trigger = name, addr, pin_n, trigger
 		pull, irq = ( (Pin.PULL_UP, Pin.IRQ_FALLING)
 			if not trigger else (Pin.PULL_DOWN, Pin.IRQ_RISING) )
 		self.debounce = trigger if debounce_check else None, int(debounce_td * 1_000)
-		self.ts, self.trigger, self.cb, self.pin = 0, trigger, callback, Pin(pin_n, Pin.IN, pull=pull)
+		self.ts, self.cb, self.pin = 0, callback, Pin(pin_n, Pin.IN, pull=pull)
 		self.pin.irq(self.irq_handler, trigger=irq)
 
 	__repr__ = lambda s: f'<Button {s.name} #{s.addr}@{s.pin_n}={s.trigger}>'
@@ -77,7 +77,7 @@ class GPIOButtonState:
 	def irq_handler(self, pin):
 		ts, (trigger, td) = time.ticks_ms(), self.debounce
 		if time.ticks_diff(ts, self.ts) < td: return
-		if trigger is not None and (self.pin.value() != trigger): return
+		if trigger is not None and pin.value() != trigger: return
 		self.ts = ts; self.log and self.log(f'{self} - pressed'); self.cb(self.addr)
 
 
