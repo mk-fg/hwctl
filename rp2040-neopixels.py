@@ -63,7 +63,8 @@ def draw_gif_anim( gif_b64, ox=0, oy=0,
 	return _draw
 
 
-gifs = cs.namedtuple('GIFStage', 'b64 ox oy td')
+gifs = cs.namedtuple('GIFStage', 'b64 ox oy rgb_border td_loop')
+acks = cs.namedtuple('ACKStage', 'rgb td trails')
 tdr = cs.namedtuple('TimeDeltaRNG', 'chance td_min td_max')
 
 def tdr_ms(delay):
@@ -74,42 +75,53 @@ def tdr_ms(delay):
 			random.random() * (tdr.td_max - tdr.td_min) ))
 	return 0
 
-def run(gif_loop, td_ack, td_post, td_sleep, **gif_kws):
-	c_ack, trails = (0, 20, 0), (1, 0.5, 0.2, 0.05)
+def run( gif, td_total, td_sleep, td_ackx=0, td_gifx=0,
+		ack=acks(b'\0\x14\0', 0.24, (1, 0.5, 0.2, 0.05)), **gif_kws ):
+	if not isinstance(gif, gifs): gif = gifs(*gif)
+	if not isinstance(ack, acks): ack = acks(*ack)
+
+	# Initial quick "ACK" animation, to indicate loop start
 	dx, dy = random.random() > 0.5, random.random() > 0.5
+	td_ack_iter, trails = round(tdr_ms(ack.td) / npw), ack.trails or [1]
 	for n in range(npw + len(trails) - 1):
 		np.fill(b'\0\0\0')
 		fx, fy = ( ( (lambda o,_nk=nk: _nk - o)
 				if d else (lambda n,_m=m,_nk=nk: _m - 1 - (_nk-o)) )
 			for d, nk, m in [(dx, n, npw), (dy, min(nph, round(n * nph/npw)), nph)] )
 		for o, k in reversed(list(enumerate(trails))):
-			c = tuple(round(c*k) for c in c_ack)
+			c = tuple(round(c*k) for c in ack.rgb)
 			if npw > (n := fx(o)) >= 0:
 				for y in range(nph): np[y*npw + n] = c
 			if nph > (n := fy(o)) >= 0:
 				for x in range(npw): np[n*npw + x] = c
-		np.write(); time.sleep_ms(15)
-	np.fill(b'\0\0\0'); np.write(); time.sleep_ms(tdr_ms(td_ack))
+		np.write(); time.sleep_ms(td_ack_iter)
+	np.fill(b'\0\0\0'); np.write(); time.sleep_ms(tdr_ms(td_ackx))
 
-	gif_draw = draw_gif_anim(gif_loop.b64, ox=gif_loop.ox, oy=gif_loop.oy, **gif_kws)
-	ts_deadline = time.ticks_ms() + tdr_ms(gif_loop.td)
-	while time.ticks_diff(ts_deadline, time.ticks_ms()) > (td := tdr_ms(td_sleep)):
-		time.sleep_ms(td); draw_border(b'\0\0\1')
-		while True:
+	# Repeated gif animations with td_sleep interval, until td_total expires
+	gif_draw = draw_gif_anim(gif.b64, ox=gif.ox, oy=gif.oy, **gif_kws)
+	tsd_total = time.ticks_add(time.ticks_ms(), tdr_ms(td_total))
+	while time.ticks_diff(tsd_total, time.ticks_ms()) > (td := tdr_ms(td_sleep)):
+		time.sleep_ms(td)
+		if gif.rgb_border: draw_border(gif.rgb_border)
+		tsd_gif = gif.td_loop and time.ticks_add(time.ticks_ms(), tdr_ms(gif.td_loop))
+		while not tsd_gif or time.ticks_diff(tsd_gif, time.ticks_ms()) > 0:
 			ms, end = gif_draw()
 			if ms: np.write(); time.sleep_ms(ms)
-			if end: time.sleep_ms(tdr_ms(td_post)); break
+			if end and not tsd_gif: break # no looping
+		time.sleep_ms(tdr_ms(td_gifx))
 		np.fill(b'\0\0\0'); np.write()
 
-def run_with_times( td_total=3 * 60,
-		td_ack=[tdr(0.5, 2, 5), tdr(1, 4, 9)],
-		td_post=[tdr(0.5, 1, 2), tdr(0.9, 1.5, 4), tdr(1, 3, 6)],
-		td_sleep=[tdr(0.1, 0, 0), tdr(0.5, 6, 15), tdr(1, 8, 20)] ):
+def run_with_times( td_total=3 * 60, # total time before exiting
+		td_sleep=[tdr(0.1, 0, 0), tdr(0.5, 6, 15), tdr(1, 8, 20)], # in disabled state b/w gifs
+		td_ackx=[tdr(0.5, 0, 0), tdr(0.5, 2, 5), tdr(1, 4, 9)], # after ack animation
+		td_gifx=[tdr(0.5, 0, 2), tdr(0.8, 1.5, 4), tdr(1, 3, 6)], **kws ): # after gif w/ decorations
+	# td's here can be lists-of-tuples to auto-convert into tdr tuples
 	td_make = lambda td: ( td if isinstance(td, (int, float))
-		else list((tdr(*tdt) if isinstance(tdt, tdr) else tdr) for tdt in td) )
-	run(
-		gif_loop=gifs(gif_nyawn, ox=1, oy=3, td=td_make(3 * 60)),
-		rgb_dim=(0.7, 0.02, 0.003), td_ack=td_make(td_ack),
-		td_post=td_make(td_post), td_sleep=td_make(td_sleep) )
+		else list((tdt if isinstance(tdt, tdr) else tdr(*tdt)) for tdt in td) )
+	kws = dict(dict(rgb_dim=(0.7, 0.02, 0.003)), **kws)
+	run( gifs(gif_nyawn, ox=1, oy=3, rgb_border=b'\0\0\1', td_loop=None),
+		td_make(td_total), td_make(td_sleep), td_make(td_ackx), td_make(td_gifx), **kws )
+
+def run_clear(): np.fill(b'\0\0\0'); np.write() # to clear leds from mpremote
 
 if __name__ == '__main__': run_with_times()

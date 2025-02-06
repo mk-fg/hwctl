@@ -134,7 +134,7 @@ and invoke it via ``mpremote exec`` with those parameters in there
 
   % mpy-cross -march=armv6m -O2 rp2040-neopixels.py -o npx.mpy
   % mpremote cp npx.mpy :
-  % mpremote exec --no-follow 'import npx; npx.run_with_times(td_total=10*60)'
+  % mpremote exec --no-follow 'import npx; npx.run_with_times(td_total=8*60)'
 
 All time-delta "td" parameters in addition to a fixed value in seconds accept
 lists of TimeDeltaRNG tuples of (chance [0-1.0], td-min [s], td-max [s]),

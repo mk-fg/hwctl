@@ -127,7 +127,7 @@ conf_defaults = adict(
 		reader_warmup_checks = 10,
 		reader_timeout = 3.0 * 60,
 		exit_timeout = 0.0 ),
-	actions = adict() ) # name = {uid, run, stdin, stop_timeout}
+	actions = adict() ) # name = {uid, run, stdin, stop_timeout} - some keys optional
 
 def conf_parse_ini(p):
 	conf = adict((k, adict(c)) for k, c in conf_defaults.items())
@@ -148,8 +148,8 @@ def conf_parse_ini(p):
 				if sk == 'uid': sv = ''.join(c for c in sv if c in '0123456789abcdefABCDEF').lower()
 				elif sk == 'run': sv = list( # '...' - arg with spaces and ''-escapes
 					s.replace('\uf43b', '').replace('\uea3a', ' ') for s in re.sub(
-						r"'(.*?)'", lambda m: m[1].replace(' ', '\uea3a').replace('\uf43b', "'"),
-						sv.replace("''", '\uf43b') ).split() )
+						r"'(.*?)'", lambda m: m[1].translate({32:'\uea3a', 10:None, 0xf43b:"'"}),
+						sv.replace("''", '\uf43b'), flags=re.DOTALL ).split() )
 				elif sk == 'stdin': sv = sv.strip()
 				elif sk == 'stop-timeout': sv = td_parse(sv)
 				else: conf_warn(); continue
@@ -291,7 +291,8 @@ async def run_action(name, cmd, stdin, timeout, kill_delay=2.0):
 		async with asyncio.timeout(timeout or 2**32):
 			proc = await asyncio.create_subprocess_exec(
 				*cmd, stdin=sp.PIPE if stdin else None )
-			if stdin: await proc.communicate(stdin.encode())
+			log.debug('%s Process started', pre)
+			await proc.communicate(stdin.encode() if stdin else None)
 	except asyncio.TimeoutError: log.debug('%s Process timed out', pre)
 	except Exception as err: log.error('%s Failed with error: %s', pre, err_fmt(err))
 	finally: await proc_cleanup(proc, f'{pre} Process')
