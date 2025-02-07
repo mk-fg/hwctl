@@ -34,14 +34,16 @@ def parse_gif(b64_zlib_data):
 
 
 np = neopixel.NeoPixel(machine.Pin(6), 160)
+npc = lambda rgb: (rgb[1], rgb[0], rgb[2]) # color order for this panel
 npw, nph = 16, 10
 
 def draw_border(c):
+	c = npc(c)
 	for x in range(npw): np[0+x] = np[(nph-1)*npw+x] = c
 	for y in range(nph): np[y*npw] = np[y*npw+npw-1] = c
 
-def draw_gif_anim( gif_b64, ox=0, oy=0,
-		rgb_dim=(0.5, 0.035, 0.007), bg=b'\0\0\0' ):
+def draw_gif_func( gif_b64, ox=0, oy=0,
+		dim_rgb=(0.5, 0.035, 0.007), bg=b'\0\0\0' ):
 	w, h, pal, frames = parse_gif(gif_b64)
 	npx, fn, fm = list(), 0, len(frames)
 	def _draw():
@@ -57,8 +59,8 @@ def draw_gif_anim( gif_b64, ox=0, oy=0,
 			for o in range(dy+dx+fx, dy+dx+fx+fw):
 				c = frame[n]; n += 1
 				if not c: continue
-				r, g, b = (round(c*k) for c, k in zip(pal[c], rgb_dim))
-				npx.append(o); np[o] = g, r, b # color order for this panel
+				np[o] = npc(tuple(round(c*k) for c, k in zip(pal[c], dim_rgb)))
+				npx.append(o)
 		return ms, loop
 	return _draw
 
@@ -76,20 +78,20 @@ def tdr_ms(delay):
 	return 0
 
 def run( gif, td_total, td_sleep, td_ackx=0, td_gifx=0,
-		ack=acks(b'\0\x14\0', 0.24, (1, 0.5, 0.2, 0.05)), **gif_kws ):
+		ack=acks(b'\x14\0\0', 0.24, (1, 0.5, 0.2, 0.05)), **gif_kws ):
 	if not isinstance(gif, gifs): gif = gifs(*gif)
 	if not isinstance(ack, acks): ack = acks(*ack)
 
 	# Initial quick "ACK" animation, to indicate loop start
 	dx, dy = random.random() > 0.5, random.random() > 0.5
-	td_ack_iter, trails = round(tdr_ms(ack.td) / npw), ack.trails or [1]
+	trails = tuple(npc(tuple(round(c*k) for c in ack.rgb)) for k in (ack.trails or [1]))
+	td_ack_iter = round(tdr_ms(ack.td) / npw)
 	for n in range(npw + len(trails) - 1):
 		np.fill(b'\0\0\0')
 		fx, fy = ( ( (lambda o,_nk=nk: _nk - o)
 				if d else (lambda n,_m=m,_nk=nk: _m - 1 - (_nk-o)) )
 			for d, nk, m in [(dx, n, npw), (dy, min(nph, round(n * nph/npw)), nph)] )
-		for o, k in reversed(list(enumerate(trails))):
-			c = tuple(round(c*k) for c in ack.rgb)
+		for o, c in reversed(list(enumerate(trails))):
 			if npw > (n := fx(o)) >= 0:
 				for y in range(nph): np[y*npw + n] = c
 			if nph > (n := fy(o)) >= 0:
@@ -98,7 +100,7 @@ def run( gif, td_total, td_sleep, td_ackx=0, td_gifx=0,
 	np.fill(b'\0\0\0'); np.write(); time.sleep_ms(tdr_ms(td_ackx))
 
 	# Repeated gif animations with td_sleep interval, until td_total expires
-	gif_draw = draw_gif_anim(gif.b64, ox=gif.ox, oy=gif.oy, **gif_kws)
+	gif_draw = draw_gif_func(gif.b64, ox=gif.ox, oy=gif.oy, **gif_kws)
 	tsd_total = time.ticks_add(time.ticks_ms(), tdr_ms(td_total))
 	while time.ticks_diff(tsd_total, time.ticks_ms()) > (td := tdr_ms(td_sleep)):
 		time.sleep_ms(td)
@@ -118,7 +120,7 @@ def run_with_times( td_total=3 * 60, # total time before exiting
 	# td's here can be lists-of-tuples to auto-convert into tdr tuples
 	td_make = lambda td: ( td if isinstance(td, (int, float))
 		else list((tdt if isinstance(tdt, tdr) else tdr(*tdt)) for tdt in td) )
-	kws = dict(dict(rgb_dim=(0.7, 0.02, 0.003)), **kws)
+	kws = dict(dict(dim_rgb=(0.7, 0.02, 0.003)), **kws)
 	run( gifs(gif_nyawn, ox=1, oy=3, rgb_border=b'\0\0\1', td_loop=None),
 		td_make(td_total), td_make(td_sleep), td_make(td_ackx), td_make(td_gifx), **kws )
 
