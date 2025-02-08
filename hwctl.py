@@ -145,12 +145,13 @@ async def fifo_read_loop(p, mode, queue):
 			if cmd: queue.put_nowait(ev_tuple(
 				ev_t.fifo_cmd, cmd.decode(errors='backslashreplace') ))
 		if not chunk: eof.set_result(None)
-	try_mkfifo, loop = True, asyncio.get_running_loop()
-	while True:
+	try_mkfifo, loop = False, asyncio.get_running_loop()
+	while True: # creating/opening fifo is full of race conditions
 		if try_mkfifo:
-			try: try_mkfifo = os.mkfifo(p, mode or 0o666)
-			except FileExistsError: pass
-			if mode: p.chmod(mode, follow_symlinks=False)
+			(p_tmp := p.parent / (p.name + f'.new.{os.getpid()}')).unlink(missing_ok=True)
+			os.mkfifo(p_tmp, mode or 0o666)
+			if mode: p_tmp.chmod(mode, follow_symlinks=False)
+			p_tmp.rename(p); try_mkfifo = False
 		try: fd = os.open(p, os.O_RDONLY | os.O_NONBLOCK)
 		except FileNotFoundError: try_mkfifo = True; continue
 		if not stat.S_ISFIFO(os.stat(fd).st_mode):
