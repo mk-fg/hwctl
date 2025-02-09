@@ -199,7 +199,7 @@ rp2040-usb-ppps script.
 
 Script to run configured commands from a simple `INI file`_ config
 (like `nfc-sticker-actions.example.ini`_) when an NFC tag/sticker
-(e.g. <$0.01 NTAG203/NTAG213 ISO14443 tags) with matching UID value
+(e.g. <$0.01 NTAG203/213 ISO14443 tags) with matching UID value
 is pressed to a reader pad.
 
 My use-case for this is sticking those cheap NTAGs on household chores/stuff
@@ -209,18 +209,17 @@ making it more difficult to forget about it, as disabling notification requires
 holding damn thing in your hand already :)
 
 Should be combined with any kind of notification or control/signaling scripts
-(e.g. notify-send or timed-ble-beacon_ stuff) to actually do something notable
-on desktop/network or in the physical world via ``[action: ...]`` sections
-in the config file.
+(e.g. notify-send, rp2040-neopixels_ above or timed-ble-beacon_ stuff) to do
+something notable on desktop/network or in the physical world via ``[action: ...]``
+sections in the config file.
 
 Data stored in NFC tag sectors isn't actually read by this script,
 as it's enough to tell apart their unique-enough built-in UIDs for its purposes.
 
 Optionally integrates with hwctl_ script above, to activate NFC pad via button,
 so that it doesn't stay powered-on needlessly all the time (and start the script
-itself via systemd.path_ unit when needed).
-Cheap ACR122U pad I have draws ~300mA from USB, but likely also supports power
-management commands to do same thing without any extra usb-ppps hardware.
+itself via systemd.path_ unit when needed), or to send other commands there,
+to e.g. power up/down whatever hardware used in ``[action: ...]`` sections.
 
 Uses pyscard_ module for NFC reader communication, via `PCSC lite`_ on linux.
 
