@@ -467,7 +467,7 @@ async def run(conf):
 						continue
 					if run := act.get('run'):
 						fifo_send(act.get('pre_hwctl'))
-						act_run = lambda: run_action(act.name, act.run, act.get('stdin'))
+						act_run = lambda a=act: run_action(a.name, a.run, a.get('stdin'))
 						act_run = ( act_run() if not (pre_wait := act.get('pre_wait'))
 							else act_run_wait(act.name, act_run, pre_wait, act.get('pre_wait_timeout')) )
 						act.task_run = task_new(act_run=act_run)

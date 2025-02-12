@@ -43,7 +43,7 @@ def draw_border(c):
 	for y in range(nph): np[y*npw] = np[y*npw+npw-1] = c
 
 def draw_gif_func( gif_b64, ox=0, oy=0,
-		dim_rgb=(0.5, 0.035, 0.007), bg=b'\0\0\0' ):
+		dim_rgb=(0.5, 0.035, 0.007), bg=b'\0\0\0', flip_x=False, flip_y=False ):
 	w, h, pal, frames = parse_gif(gif_b64)
 	npx, fn, fm = list(), 0, len(frames)
 	def _draw():
@@ -53,14 +53,16 @@ def draw_gif_func( gif_b64, ox=0, oy=0,
 		for o in npx: np[o] = bg
 		npx.clear()
 		if not fw: return ms, loop
-		n, dx = 0, npw + ox
-		for y in range(fy, fy+fh):
-			dy = (nph - (oy+y)) * npw
-			for o in range(dy+dx+fx, dy+dx+fx+fw):
+		n = 0
+		for y in range(oy+fy, oy+fy+fh):
+			if flip_y: y = nph-1 - y
+			y *= npw
+			for x in range(ox+fx, ox+fx+fw):
 				c = frame[n]; n += 1
 				if not c: continue
+				if flip_x: x = npw-1 - x
+				npx.append(o := y + x)
 				np[o] = npc(tuple(round(c*k) for c, k in zip(pal[c], dim_rgb)))
-				npx.append(o)
 		return ms, loop
 	return _draw
 
@@ -77,12 +79,7 @@ def tdr_ms(delay):
 			random.random() * (tdr.td_max - tdr.td_min) ))
 	return 0
 
-def run( gif, td_total, td_sleep, td_ackx=0, td_gifx=0,
-		ack=acks(b'\x14\0\0', 0.24, (1, 0.5, 0.2, 0.05)), **gif_kws ):
-	if not isinstance(gif, gifs): gif = gifs(*gif)
-	if not isinstance(ack, acks): ack = acks(*ack)
-
-	# Initial quick "ACK" animation, to indicate loop start
+def run_ack(ack):
 	dx, dy = random.random() > 0.5, random.random() > 0.5
 	trails = tuple(npc(tuple(round(c*k) for c in ack.rgb)) for k in (ack.trails or [1]))
 	td_ack_iter = round(tdr_ms(ack.td) / npw)
@@ -97,6 +94,15 @@ def run( gif, td_total, td_sleep, td_ackx=0, td_gifx=0,
 			if nph > (n := fy(o)) >= 0:
 				for x in range(npw): np[n*npw + x] = c
 		np.write(); time.sleep_ms(td_ack_iter)
+
+def run( gif, td_total, td_sleep, td_ackx=0, td_gifx=0,
+		ack=acks(b'\x14\0\0', 0.24, (1, 0.5, 0.2, 0.05)), gif_speed=1.0, **gif_kws ):
+	if not isinstance(gif, gifs): gif = gifs(*gif)
+	if ack and not isinstance(ack, acks): ack = acks(*ack)
+	gif_speed = 1 / gif_speed
+
+	# Initial quick "ACK" animation, to indicate loop start
+	if ack: run_ack(ack)
 	np.fill(b'\0\0\0'); np.write(); time.sleep_ms(tdr_ms(td_ackx))
 
 	# Repeated gif animations with td_sleep interval, until td_total expires
@@ -108,7 +114,7 @@ def run( gif, td_total, td_sleep, td_ackx=0, td_gifx=0,
 		tsd_gif = gif.td_loop and time.ticks_add(time.ticks_ms(), tdr_ms(gif.td_loop))
 		while not tsd_gif or time.ticks_diff(tsd_gif, time.ticks_ms()) > 0:
 			ms, end = gif_draw()
-			if ms: np.write(); time.sleep_ms(ms)
+			if ms: np.write(); time.sleep_ms(round(ms*gif_speed))
 			if end and not tsd_gif: break # no looping
 		time.sleep_ms(tdr_ms(td_gifx))
 		np.fill(b'\0\0\0'); np.write()
@@ -121,7 +127,7 @@ def run_with_times( td_total=3 * 60, # total time before exiting
 	td_make = lambda td: ( td if isinstance(td, (int, float))
 		else list((tdt if isinstance(tdt, tdr) else tdr(*tdt)) for tdt in td) )
 	kws = dict(dict(dim_rgb=(0.7, 0.02, 0.003)), **kws)
-	run( gifs(gif_nyawn, ox=1, oy=3, rgb_border=b'\0\0\1', td_loop=None),
+	run( gifs(gif_nyawn, ox=1, oy=1, rgb_border=b'\0\0\1', td_loop=None),
 		td_make(td_total), td_make(td_sleep), td_make(td_ackx), td_make(td_gifx), **kws )
 
 def run_clear(): np.fill(b'\0\0\0'); np.write() # to clear leds from mpremote

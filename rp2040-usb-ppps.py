@@ -16,9 +16,9 @@ class HWCtlConf:
 	usb_hub_ports = dict( # pin=<n> (None=noop), addr=<n || pin>
 		hub1_port1=dict(pin=0), hub1_port2=dict(pin=1),
 		# hub1_port3= -- does not have a relay, not used here
-		hub1_port4=dict(pin=2), init=dict(pin=5, addr=15) )
+		hub1_port4=dict(pin=2), hub2_port1=dict(pin=4) )
 	button_pins = dict( # pin=<n>, addr=<n || pin>, trigger=<0/1>
-		btn1=dict(pin=4, addr=0, trigger=0) )
+		btn1=dict(pin=3, addr=0, trigger=0) )
 
 
 class USBPortState:
