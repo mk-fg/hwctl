@@ -40,12 +40,12 @@ Repository URLs:
   https://www.raspberrypi.com/documentation/microcontrollers/rp2040.html
 
 
-`rp2040-usb-ppps`_
+`mpy-usb-ppps`_
 ------------------
-.. _rp2040-usb-ppps: rp2040-usb-ppps.py
+.. _mpy-usb-ppps: mpy-usb-ppps.py
 
-RP2040 firmware-script used to control USB per-port-power-switching, but NOT via
-actual built-in ppps protocol that some USB Hub devices support (and can be done
+Micropython firmware-script used to control USB per-port-power-switching, but NOT
+via actual built-in ppps protocol that some USB Hub devices support (and can be done
 using sysfs on linux, or uhubctl_ tool), and instead via cheap solid-state-relays,
 soldered to a simple USB Hub with push-button power controls on ports.
 
@@ -76,9 +76,9 @@ Hubs with ppps have two deal-breaking downsides for me:
   default-on state is actually worse than simple always-on ports.
 
 Controlling power via $1 SSRs soldered to buttons neatly fixes the issue -
-nothing gets randomly powered-on, and when it does, code on the rp2040
-controller can be smart enough to know when to shut down devices if whatever
-using them stops sending it "this one is still in use" pings.
+nothing gets randomly powered-on, and when it does, code on the
+microcontroller can be smart enough to know when to shut down devices if
+whatever using them stops sending it "this one is still in use" pings.
 
 Implemented using mostly-stateless protocol sending single-byte commands over ttyACM
 (usb tty) back-and-forth, so that there can be no "short read" buffering issues.
@@ -86,7 +86,7 @@ Implemented using mostly-stateless protocol sending single-byte commands over tt
 Script also implements listening to connected push-buttons, as configured in
 HWCtlConf at the top, and sending one-byte events for those.
 
-When using mpremote with RP2040s, ``mpremote run rp2040-usb-ppps.py``
+When using mpremote with at least RP2040s, ``mpremote run mpy-usb-ppps.py``
 won't connect its stdin to the script (at least current 2023 version of it),
 so right way to actually run it seem to be uploading as ``main.py`` and do
 ``mpremote reset`` or something to that effect.
@@ -94,7 +94,7 @@ so right way to actually run it seem to be uploading as ``main.py`` and do
 For deploying script as long-term firmware, pre-compiling it via
 `mpy-cross tool`_ is probably a good idea::
 
-  % mpy-cross -march=armv6m -O2 rp2040-usb-ppps.py -o usb_ppps.mpy
+  % mpy-cross -march=armv6m -O2 mpy-usb-ppps.py -o usb_ppps.mpy
   % mpremote cp usb_ppps.mpy :
   % echo 'import usb_ppps; usb_ppps.run()' >loader.py
   % mpremote cp loader.py :main.py
@@ -115,9 +115,9 @@ Also wrote-up some extended thoughts on this subject in a
   https://blog.fraggod.net/2023/11/17/usb-hub-per-port-power-switching-done-right-with-a-couple-wires.html
 
 
-`rp2040-neopixels`_
+`mpy-neopixels`_
 -------------------
-.. _rp2040-neopixels: rp2040-neopixels.py
+.. _mpy-neopixels: mpy-neopixels.py
 
 Script to display packed GIF pixel-art animation on a neopixel_ panel
 like `Waveshare Pico-RGB-LED`_ 16x10 WS2812 LED matrix, looping it with
@@ -131,12 +131,12 @@ One way to run the script on device connected over ttyACM without needing it
 locally and with any kind of configuration parameters, is to compile it
 using mpy-cross (also mentioned above), upload resulting mpy module file,
 and invoke it via ``mpremote exec`` with those parameters in there
-(instead of more usual ``mpremote run rp2040-neopixels.py``)::
+(instead of more usual ``mpremote run mpy-neopixels.py``)::
 
   ## For more space/mem/import-time optimized version:
-  % mpy-cross -march=armv6m -O2 rp2040-neopixels.py -o npx.mpy
+  % mpy-cross -march=armv6m -O2 mpy-neopixels.py -o npx.mpy
   % mpremote cp npx.mpy :
-  ## ...or without mpy-cross: mpremote cp rp2040-neopixels.py :npx.py
+  ## ...or without mpy-cross: mpremote cp mpy-neopixels.py :npx.py
 
   ## Import and run with configuration tweaks
   % mpremote exec --no-follow 'import npx; npx.run_with_times(td_total=8*60)'
@@ -174,7 +174,7 @@ proxied to/from whatever simple unixy IPC mechanisms, like files and FIFOs.
   Allows sending those from any shell script using e.g. ``echo usb3=on >hwctl.fifo``
 
   Currently parsed commands are (X=0-15): ``usbX=on``, ``usbX=off``, ``usbX=wdt``,
-  which are encoded and sent to `rp2040-usb-ppps`_ script above.
+  which are encoded and sent to `mpy-usb-ppps`_ script above.
 
 - Can send commands to MCU, mapped to unix signals - via ``-s/--control-signal`` option.
 
@@ -189,7 +189,7 @@ Uses serial_asyncio module from `pyserial/pyserial-asyncio`_ for ttyACMx communi
 `Older version`_ used to poll /proc/self/mountinfo fd and do some "don't forget
 to unmount" indication via LEDs connected to Arduino Uno board (running `hwctl.ino`_),
 read/debounce physical buttons, as well as similar usb-control wdt logic as
-rp2040-usb-ppps script.
+mpy-usb-ppps script.
 
 .. _mkfifo: https://man.archlinux.org/man/mkfifo.1
 .. _systemd.path unit: https://man.archlinux.org/man/systemd.path.5
@@ -214,7 +214,7 @@ making it more difficult to forget about it, as disabling notification requires
 holding damn thing in your hand already :)
 
 Should be combined with any kind of notification or control/signaling scripts
-(e.g. notify-send, rp2040-neopixels_ above or timed-ble-beacon_ stuff) to do
+(e.g. notify-send, mpy-neopixels_ above or timed-ble-beacon_ stuff) to do
 something notable on desktop/network or in the physical world via ``[action: ...]``
 sections in the config file.
 
@@ -244,7 +244,7 @@ Uses pyscard_ module for NFC reader communication, via `PCSC lite`_ on linux.
 Helper script to efficiently pack GIF animation frames into an
 easy-to-decode and relatively small sequential color arrays to
 display via neopixel_ LED matrices (e.g. N-by-M rectangle of WS2812 LEDs),
-via e.g. `rp2040-neopixels`_ script above.
+via e.g. `mpy-neopixels`_ script above.
 
 For example, it compresses complicated and messy 2,621-byte 16x8 49-frame
 animated GIF file down to ~290 bytes, which are much easier to embed into
