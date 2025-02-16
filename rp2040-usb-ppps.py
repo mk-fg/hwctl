@@ -1,3 +1,4 @@
+# -*- mode: python -*-
 # RP2040 micropython fw script to control USB port power pins over ttyACM,
 #  using one-byte commands and with a simple watchdog-timeout logic to power them off.
 

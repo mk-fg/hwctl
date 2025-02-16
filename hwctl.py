@@ -227,12 +227,11 @@ def main(args=None):
 				-F /tmp/btns-all.log:mode=600:max-bytes=8_000:bak-count=3
 				-F /tmp/btns-lights.log:mode=640:max-bytes=4_000:buttons=1,4-8,11
 			Files only get opened/rotated when there's some output there.'''))
-	parser.add_argument('-p', '--pid-file',
-		metavar='file', help='File to write pid into, for signaling and deduplication.')
-	parser.add_argument('-v', '--verbose',
-		action='store_true', help='Verbose operation mode.')
-	parser.add_argument('--debug',
-		action='store_true', help='Print tty traffic in addition to -v/--verbose info.')
+	parser.add_argument('-p', '--pid-file', metavar='file',
+		help='File to write pid into, for signaling and deduplication.')
+	parser.add_argument('-v', '--verbose', action='store_true', help='Verbose operation mode.')
+	parser.add_argument('--debug', action='store_true',
+		help='Print tty traffic in addition to -v/--verbose info.')
 	opts = parser.parse_args(sys.argv[1:] if args is None else args)
 
 	global log

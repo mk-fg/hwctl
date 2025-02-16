@@ -95,12 +95,13 @@ For deploying script as long-term firmware, pre-compiling it via
 `mpy-cross tool`_ is probably a good idea::
 
   % mpy-cross -march=armv6m -O2 rp2040-usb-ppps.py -o usb_ppps.mpy
-  % echo 'import usb_ppps; usb_ppps.run()' >loader.py
   % mpremote cp usb_ppps.mpy :
+  % echo 'import usb_ppps; usb_ppps.run()' >loader.py
   % mpremote cp loader.py :main.py
   % mpremote reset
 
-(mpy-cross binary used there is trivial to build - see `Arch PKGBUILD here`_)
+(mpy-cross binary used there is trivial to build - see `Arch PKGBUILD here`_ -
+but copying script itself as main.py will work for autorun just as well)
 
 Also wrote-up some extended thoughts on this subject in a
 `"USB hub per-port power switching done right" blog post`_.
@@ -132,8 +133,12 @@ using mpy-cross (also mentioned above), upload resulting mpy module file,
 and invoke it via ``mpremote exec`` with those parameters in there
 (instead of more usual ``mpremote run rp2040-neopixels.py``)::
 
+  ## For more space/mem/import-time optimized version:
   % mpy-cross -march=armv6m -O2 rp2040-neopixels.py -o npx.mpy
   % mpremote cp npx.mpy :
+  ## ...or without mpy-cross: mpremote cp rp2040-neopixels.py :npx.py
+
+  ## Import and run with configuration tweaks
   % mpremote exec --no-follow 'import npx; npx.run_with_times(td_total=8*60)'
 
 All time-delta "td" parameters in addition to a fixed value in seconds accept

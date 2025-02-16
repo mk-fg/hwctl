@@ -1,3 +1,4 @@
+# -*- mode: python -*-
 # RP2040 micropython fw script to play animations on ws2812 neopixel RGB-LED panel
 
 import random, collections as cs
