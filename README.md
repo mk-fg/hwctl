@@ -233,7 +233,8 @@ as it's enough to tell apart their unique-enough built-in UIDs for its purposes.
 Optionally integrates with [hwctl] script above, to activate NFC pad via button,
 so that it doesn't stay powered-on needlessly all the time (and start the script
 itself via [systemd.path unit] when needed), or to send other commands there,
-to e.g. power up/down whatever hardware used in `[action: ...]` sections.
+to e.g. power up/down whatever hardware used in `[action: ...]` sections,
+or also to trigger actions via hw buttons directly (without NFC).
 
 Uses [pyscard] module for NFC reader communication, via [PCSC lite] on linux.
 

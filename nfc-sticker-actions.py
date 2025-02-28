@@ -147,6 +147,7 @@ def conf_parse_ini(p):
 			for sk, sv in sec.items():
 				if (sk := sk.replace(*'_-')) == 'stdin': sv = sv.strip()
 				elif sk == 'uid': sv = ''.join(c for c in sv.lower() if c in '0123456789abcdef')
+				elif sk == 'btn': sv = list(int(n) for n in sv.split())
 				elif sk == 'run': sv = list( # '...' - arg with spaces and ''-escapes
 					s.replace('\uf43b', '').replace('\uea3a', ' ') for s in re.sub(
 						r"'(.*?)'", lambda m: m[1].translate({32:'\uea3a', 10:None, 0xf43b:"'"}),
@@ -160,8 +161,8 @@ def conf_parse_ini(p):
 						pre, ck, ' '.join(v for v in sv if v not in svx) )
 				else: conf_warn(); continue
 				act[sk.replace(*'-_')] = sv
-			if not act.get('uid'): log.warning(
-				'%s Ignoring action section without NFC UID value: [%s]', pre, ck )
+			if not (act.get('uid') or act.get('btn')): log.warning(
+				'%s Ignoring action section without uid= or btn= values: [%s]', pre, ck )
 		elif ck: log.warning('%s Unused config section: [%s]', pre, ck)
 	if cmds := conf.hwctl.fifo_enable_btns.split():
 		btn_map = conf.hwctl.fifo_enable_btns = dict()
@@ -454,30 +455,32 @@ async def run(conf):
 					float(btn_ts), int((m := re.fullmatch(r'btn=(\d+)', btn)) and m[1] or 0) )
 				except: log.debug('hwctl: unrecognized btn-log line [ %s ]', line); continue
 				if time.time() - btn_ts > conf.hwctl.log_time_slack: continue
-				if not (cmds := conf.hwctl.fifo_enable_btns.get(btn)): continue
-				fifo_send(cmds); nfc_start()
+				if cmds := conf.hwctl.fifo_enable_btns.get(btn): fifo_send(cmds); nfc_start()
+				act_id = f'={btn}'
+			elif ev.get('nfc_done'):
+				fifo_send(conf.hwctl.fifo_disable); exit_task_update(); continue
+			elif not (act_id := ev.get('nfc')): continue
 
-			elif nfc_uid := ev.get('nfc'):
-				nfc_uid, nfc_uid_found = nfc_uid.lower(), False
-				for act in conf.actions.values():
-					if act.uid != nfc_uid: continue
-					nfc_uid_found = True
-					if not task_done(act.get('task_run')):
-						log.info('NFC: [action %s] still running for UID %s', act.name, nfc_uid)
-						continue
-					if run := act.get('run'):
-						fifo_send(act.get('pre_hwctl'))
-						act_run = lambda a=act: run_action(a.name, a.run, a.get('stdin'))
-						act_run = ( act_run() if not (pre_wait := act.get('pre_wait'))
-							else act_run_wait(act.name, act_run, pre_wait, act.get('pre_wait_timeout')) )
-						act.task_run = task_new(act_run=act_run)
-					if not task_done(tt := act.get('task_stop')): task_cancel(tt)
-					timeout, cmds = act.get('stop_timeout'), act.get('stop_hwctl')
-					if timeout or cmds: act.task_stop = task_new(
-						act_stop=act_timeout(act.name, act.get('task_run'), timeout, cmds) )
-				if not nfc_uid_found: log.warning('NFC: no action for UID - %s', nfc_uid)
-
-			elif ev.get('nfc_done'): fifo_send(conf.hwctl.fifo_disable); exit_task_update()
+			act_id = act_id.lower() if (act_nfc := act_id[0] != '=') else int(act_id[1:])
+			act_found, log_id = False, f'NFC UID {act_id}' if act_nfc else f'button {act_id}'
+			log.debug('action: lookup for %s', log_id)
+			for act in conf.actions.values():
+				if not (act_id == act.get('uid') or act_id in act.get('btn', list())): continue
+				act_found = True
+				if not task_done(act.get('task_run')):
+					log.info('action: [%s] still running for %s', act.name, log_id)
+					continue
+				if run := act.get('run'):
+					fifo_send(act.get('pre_hwctl'))
+					act_run = lambda a=act: run_action(a.name, a.run, a.get('stdin'))
+					act_run = ( act_run() if not (pre_wait := act.get('pre_wait'))
+						else act_run_wait(act.name, act_run, pre_wait, act.get('pre_wait_timeout')) )
+					act.task_run = task_new(act_run=act_run)
+				if not task_done(tt := act.get('task_stop')): task_cancel(tt)
+				timeout, cmds = act.get('stop_timeout'), act.get('stop_hwctl')
+				if timeout or cmds: act.task_stop = task_new(
+					act_stop=act_timeout(act.name, act.get('task_run'), timeout, cmds) )
+			if act_nfc and not act_found: log.warning('action: no match for %s', log_id)
 
 	log.debug('Loop: finished')
 	for tt in tasks:
@@ -493,8 +496,8 @@ def main(args=None):
 	parser = argparse.ArgumentParser(
 		formatter_class=argparse.RawTextHelpFormatter, description=dd('''
 			Script to run configured commands based on NFC sticker UIDs.
-			Can interact with running hwctl.py script from the same repo
-				to enable NFC reader via some button wired to GPIO pin,
+			Can interact with running hwctl.py script from the same repo to
+				enable NFC reader via some button wired to GPIO pin or run actions on those,
 				starting from e.g. systemd.path unit when its buttons log-file updates.'''))
 	parser.add_argument('-c', '--conf', metavar='path',
 		default=pl.Path(__file__).name.removesuffix('.py') + '.ini', help=dd('''
@@ -510,7 +513,14 @@ def main(args=None):
 		style='{', format='{levelname:5} :: {message}', datefmt='%Y-%m-%dT%H:%M:%S' )
 	log = logging.getLogger('nsa')
 
-	conf = conf_parse_ini(pl.Path(opts.conf))
+	conf = conf_parse_ini(p := pl.Path(opts.conf))
+	if not conf.hwctl.log_file:
+		if conf.hwctl.fifo_enable_btns:
+			parser.error( f'[conf {p.name}] hwctl.fifo-enable-btns'
+				' are specified without hwctl.log-file to read those from' )
+		for name, act in conf.actions.items():
+			if act.get('btn'): parser.error( f'[conf {p.name}] [action: {name}]'
+				' has btn= trigger(s) set, with no hwctl.log-file to read those from' )
 	with cl.suppress(asyncio.CancelledError): return asyncio.run(run(conf))
 
 if __name__ == '__main__': sys.exit(main())
