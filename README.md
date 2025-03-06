@@ -113,6 +113,10 @@ For deploying script as long-term firmware, pre-compiling it via
 (mpy-cross binary used there is trivial to build - see [Arch PKGBUILD here] -
 but copying script itself as main.py will work for autorun just as well)
 
+`loader.py` in that example can also include/pass any config options to run(),
+e.g. `run(verbose=True, btn_debounce=0.3)`, to be used as a plaintext
+configuration file, without the need to replace main mpy module.
+
 Also wrote-up some extended thoughts on this subject in a
 ["USB hub per-port power switching done right" blog post].
 

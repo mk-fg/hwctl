@@ -21,6 +21,9 @@ class HWCtlConf:
 	button_pins = dict( # pin=<n>, addr=<n || pin>, trigger=<0/1>
 		btn1=dict(pin=3, addr=0, trigger=0) )
 
+	def __init__(self, **opts):
+		for k, v in opts.items(): getattr(self, k); setattr(self, k, v)
+
 
 class USBPortState:
 
@@ -163,7 +166,7 @@ class HWCtl:
 		for st in self.usbs.values(): st.wdt_check(ts)
 
 
-async def main():
+async def main(**opts):
 	stdout = asyncio.StreamWriter(sys.stdout, {})
 	outq, outq_flag = cs.deque([], 20), asyncio.ThreadSafeFlag()
 	def outq_send(data):
@@ -181,7 +184,7 @@ async def main():
 			await stdout.drain()
 	outq_task = asyncio.create_task(_outq_flush())
 
-	hwctl = HWCtl(conf := HWCtlConf(), outq_send)
+	hwctl = HWCtl(conf := HWCtlConf(**opts), outq_send)
 	p_log = conf.verbose and (lambda msg: hwctl.cmd_send(f'[main] {msg}'))
 	p_log and p_log('--- scheduler init ---')
 	stdin = asyncio.StreamReader(sys.stdin.buffer)
@@ -200,5 +203,5 @@ async def main():
 	outq_task.cancel()
 	p_log and p_log('--- scheduler stop ---')
 
-def run(): asyncio.run(main())
+def run(**opts): asyncio.run(main(**opts))
 if __name__ == '__main__': run()
