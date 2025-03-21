@@ -122,6 +122,7 @@ conf_defaults = adict(
 		fifo_enable_btns = '',
 		fifo_disable = '' ),
 	main = adict(
+		debug = False,
 		reader_name = '',
 		reader_warmup = 3.0,
 		reader_warmup_checks = 10,
@@ -514,6 +515,7 @@ def main(args=None):
 	log = logging.getLogger('nsa')
 
 	conf = conf_parse_ini(p := pl.Path(opts.conf))
+	if conf.main.debug: logging.root.setLevel(logging.DEBUG)
 	if not conf.hwctl.log_file:
 		if conf.hwctl.fifo_enable_btns:
 			parser.error( f'[conf {p.name}] hwctl.fifo-enable-btns'
