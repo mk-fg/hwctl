@@ -153,7 +153,7 @@ async def fifo_read_loop(p, mode, queue):
 			if mode: p_tmp.chmod(mode, follow_symlinks=False)
 			p_tmp.rename(p); try_mkfifo = False
 		try: fd = os.open(p, os.O_RDONLY | os.O_NONBLOCK)
-		except FileNotFoundError: try_mkfifo = True; continue
+		except (FileNotFoundError, PermissionError): try_mkfifo = True; continue
 		if not stat.S_ISFIFO(os.stat(fd).st_mode):
 			os.close(fd); p.unlink(missing_ok=True); try_mkfifo = True; continue
 		with open(fd, 'rb') as src:
