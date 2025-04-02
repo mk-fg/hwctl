@@ -73,7 +73,7 @@ class GPIOButtonState:
 		pull, irq = ( (Pin.PULL_UP, Pin.IRQ_FALLING)
 			if not trigger else (Pin.PULL_DOWN, Pin.IRQ_RISING) )
 		self.debounce = trigger if debounce_check else None, int(debounce_td * 1_000)
-		self.ts, self.cb, self.pin = 0, callback, Pin(pin_n, Pin.IN, pull=pull)
+		self.ts, self.cb, self.pin = time.ticks_ms(), callback, Pin(pin_n, Pin.IN, pull=pull)
 		self.pin.irq(self.irq_handler, trigger=irq)
 
 	__repr__ = lambda s: f'<Button {s.name} #{s.addr}@{s.pin_n}={s.trigger}>'
