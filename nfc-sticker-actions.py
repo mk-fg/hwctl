@@ -68,7 +68,7 @@ def main_reader():
 		except sc_exc.CardRequestTimeoutException: continue
 		try:
 			(conn := c_svc.connection).connect()
-			data, sw1, sw2 = conn.transmit([0xFF, 0xCA, 0x00, 0x00, 0x00])
+			data, *extras = conn.transmit(list(bytes.fromhex(conf.cmd)))
 			conn.disconnect()
 		except sc_exc.NoCardException: c_new = False # removed too quickly
 		except sc_exc.SmartcardException as err: log_err(f'reader error: {err_fmt(err)}')
@@ -124,6 +124,7 @@ conf_defaults = adict(
 	main = adict(
 		debug = False,
 		reader_name = '',
+		reader_uid_cmd = '',
 		reader_warmup = 3.0,
 		reader_warmup_checks = 10,
 		reader_timeout = 3.0 * 60,
@@ -307,7 +308,7 @@ async def run_fifo_send(p, cmds, timeout=2.0):
 	finally: os.close(fd)
 
 
-async def proc_cleanup(proc, log_prefix, kill_delay=2.0):
+async def run_proc_cleanup(proc, log_prefix, kill_delay=2.0):
 	if not proc: return
 	log_fn = lambda msg,*a: log.debug(f'%s {msg}', log_prefix, *a)
 	if (n := proc.returncode) is not None: return log_fn('exited (code=%s)', n)
@@ -320,7 +321,7 @@ async def proc_cleanup(proc, log_prefix, kill_delay=2.0):
 			with cl.suppress(OSError): term = proc.kill()
 		log_fn('terminated' if term else 'killed')
 
-async def run_action(name, cmd, stdin):
+async def run_proc_action(name, cmd, stdin):
 	proc, pre = None, f'[action {name}]'
 	try:
 		proc = await asyncio.create_subprocess_exec(
@@ -328,21 +329,21 @@ async def run_action(name, cmd, stdin):
 		log.debug('%s Process started', pre)
 		await proc.communicate(stdin.encode() if stdin else None)
 	except Exception as err: log.error('%s Failed with error: %s', pre, err_fmt(err))
-	finally: await proc_cleanup(proc, f'{pre} Process')
+	finally: await run_proc_cleanup(proc, f'{pre} Process')
 
-async def run_reader(name, cb, proc_info, times):
+async def run_proc_reader(name, cb, proc_info, uid_cmd, times):
 	proc, pre, log_fns = None, f'[nfc]', dict(enumerate([log.debug, log.error]))
 	try:
 		proc = await asyncio.create_subprocess_exec(
 			sys.executable or 'python', __file__, '--nfc', stdin=sp.PIPE, stdout=sp.PIPE )
 		proc_info.pid = proc.pid
-		proc.stdin.write(json.dumps(dict(name=name, **times)).encode())
+		proc.stdin.write(json.dumps(dict(name=name, cmd=uid_cmd, **times)).encode())
 		await proc.stdin.drain(); proc.stdin.close(); await proc.stdin.wait_closed()
 		while (line := await proc.stdout.readline()):
 			if not (log_fn := log_fns.get(line[0])): cb(line.decode().strip())
 			else: log_fn('[nfc] ' + line[1:].decode().strip())
 	except Exception as err: log.error('%s subproc failed: %s', pre, err_fmt(err))
-	finally: await proc_cleanup(proc, f'{pre} subproc')
+	finally: await run_proc_cleanup(proc, f'{pre} subproc')
 
 
 async def run(conf):
@@ -366,11 +367,11 @@ async def run(conf):
 		if not task_done(nfc_task) and (pid := nfc_task_proc.get('pid')):
 			try: return os.kill(pid, signal.SIGHUP)
 			except OSError: return
-		nfc_task = task_new(reader=run_reader(
+
+		nfc_task = task_new(reader=run_proc_reader(
 			conf.main.reader_name, lambda ev: evq.put_nowait(dict(nfc=ev)),
-			nfc_task_proc := adict(), times=adict(
-				td=conf.main.reader_timeout,
-				td_warmup=conf.main.reader_warmup,
+			nfc_task_proc := adict(), uid_cmd=conf.main.reader_uid_cmd, times=adict(
+				td=conf.main.reader_timeout, td_warmup=conf.main.reader_warmup,
 				td_warmup_checks=conf.main.reader_warmup_checks )))
 		log.debug('NFC: started reader subprocess')
 		exit_task_update()
@@ -473,7 +474,7 @@ async def run(conf):
 					continue
 				if run := act.get('run'):
 					fifo_send(act.get('pre_hwctl'))
-					act_run = lambda a=act: run_action(a.name, a.run, a.get('stdin'))
+					act_run = lambda a=act: run_proc_action(a.name, a.run, a.get('stdin'))
 					act_run = ( act_run() if not (pre_wait := act.get('pre_wait'))
 						else act_run_wait(act.name, act_run, pre_wait, act.get('pre_wait_timeout')) )
 					act.task_run = task_new(act_run=act_run)
@@ -523,6 +524,12 @@ def main(args=None):
 		for name, act in conf.actions.items():
 			if act.get('btn'): parser.error( f'[conf {p.name}] [action: {name}]'
 				' has btn= trigger(s) set, with no hwctl.log-file to read those from' )
+	try:
+		if not (cmd := conf.main.reader_uid_cmd).strip(): raise ValueError
+		bytes.fromhex(conf.main.reader_uid_cmd)
+	except:
+		parser.error(f'[conf {p.name}] main.reader-uid-cmd is missing or cannot be hex-decoded')
+
 	with cl.suppress(asyncio.CancelledError): return asyncio.run(run(conf))
 
 if __name__ == '__main__': sys.exit(main())
