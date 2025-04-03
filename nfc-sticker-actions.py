@@ -11,9 +11,10 @@ err_fmt = lambda err: f'[{err.__class__.__name__}] {err}'
 
 
 ### Part 1/2 - Subprocess to only interact with nfc-reader and scrap afterwards
-# Using pyscard modules in main process makes it difficult to cleanly
-#  disconnect it from pcsc-lite, stop it easily mid-thread and cleanup other stuff.
-# Hence this stub to run that in a subprocess.
+# pyscard module relies on python GC to disconnect from pcscd,
+#  which is unreliable, it's difficult to stop it cleanly in threads.
+# Hence this stub to run that in a subprocess, where stop/cleanup is easy.
+# See https://github.com/LudovicRousseau/pyscard/issues/223 for more details.
 
 def retries_within_timeout( tries, timeout,
 		backoff_func=lambda e,n: ((e**n-1)/(e*5)), slack=1e-2 ):
@@ -57,10 +58,10 @@ def main_reader():
 			err = f'More than one{rm} PCSC-lite reader: {err}'
 		return log_err(err)
 	log_debug(f'Using reader [ {reader.name} ]')
-	c_new = False
+	c_new, ts = False, 0
 	while True:
-		td = min(conf.td, conf.ts_done - time.monotonic() + 1)
-		if td < 0: log_debug('reader loop done'); break
+		if (td := abs(ts - (ts := time.monotonic()))) < conf.td_checks: time.sleep(td)
+		if (td := min(conf.td, conf.ts_done - ts + 1)) < 0: log_debug('reader loop done'); break
 		try:
 			c_req = sc_req.CardRequest(
 				readers=[reader], newcardonly=c_new, timeout=td )
@@ -69,7 +70,7 @@ def main_reader():
 		try:
 			(conn := c_svc.connection).connect()
 			data, *extras = conn.transmit(list(bytes.fromhex(conf.cmd)))
-			conn.disconnect()
+			getattr(conn, 'close', conn.disconnect)() # newer pyscard might have close()
 		except sc_exc.NoCardException: c_new = False # removed too quickly
 		except sc_exc.SmartcardException as err: log_err(f'reader error: {err_fmt(err)}')
 		else: out(bytes(data).hex()); ts_bump()
@@ -372,7 +373,7 @@ async def run(conf):
 			conf.main.reader_name, lambda ev: evq.put_nowait(dict(nfc=ev)),
 			nfc_task_proc := adict(), uid_cmd=conf.main.reader_uid_cmd, times=adict(
 				td=conf.main.reader_timeout, td_warmup=conf.main.reader_warmup,
-				td_warmup_checks=conf.main.reader_warmup_checks )))
+				td_checks=1.0, td_warmup_checks=conf.main.reader_warmup_checks )))
 		log.debug('NFC: started reader subprocess')
 		exit_task_update()
 
