@@ -12,7 +12,7 @@ err_fmt = lambda err: f'[{err.__class__.__name__}] {err}'
 
 ### Part 1/2 - Subprocess to only interact with nfc-reader and scrap afterwards
 # pyscard module relies on python GC to disconnect from pcscd,
-#  which is unreliable, it's difficult to stop it cleanly in threads.
+#  which is unreliable, and it's difficult to stop it cleanly in threads.
 # Hence this stub to run that in a subprocess, where stop/cleanup is easy.
 # See https://github.com/LudovicRousseau/pyscard/issues/223 for more details.
 
@@ -58,10 +58,13 @@ def main_reader():
 			err = f'More than one{rm} PCSC-lite reader: {err}'
 		return log_err(err)
 	log_debug(f'Using reader [ {reader.name} ]')
-	c_new, ts = False, 0
+	c_new, (tbf_burst, tbf_rate) = False, conf.tbf_checks
+	tbf_n, tbf_rate, ts = tbf_burst, tbf_rate**-1, time.monotonic()
 	while True:
-		if (td := abs(ts - (ts := time.monotonic()))) < conf.td_checks: time.sleep(td)
-		if (td := min(conf.td, conf.ts_done - ts + 1)) < 0: log_debug('reader loop done'); break
+		if (tbf_n := min( tbf_burst, tbf_n - 1 # simple token-bucket rate-limiting
+				+ tbf_rate * abs(ts - (ts := time.monotonic())) )) < 0:
+			time.sleep((1 - tbf_n) / tbf_rate)
+		if (td := min(conf.td, conf.ts_done - ts + 1)) < 0: log_debug('reader done'); break
 		try:
 			c_req = sc_req.CardRequest(
 				readers=[reader], newcardonly=c_new, timeout=td )
@@ -373,7 +376,7 @@ async def run(conf):
 			conf.main.reader_name, lambda ev: evq.put_nowait(dict(nfc=ev)),
 			nfc_task_proc := adict(), uid_cmd=conf.main.reader_uid_cmd, times=adict(
 				td=conf.main.reader_timeout, td_warmup=conf.main.reader_warmup,
-				td_checks=1.0, td_warmup_checks=conf.main.reader_warmup_checks )))
+				tbf_checks=(4, 1.0), td_warmup_checks=conf.main.reader_warmup_checks )))
 		log.debug('NFC: started reader subprocess')
 		exit_task_update()
 
