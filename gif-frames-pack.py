@@ -3,8 +3,6 @@
 import itertools as it, subprocess as sp
 import os, sys, io, re, math, struct, zlib, base64
 
-from PIL import Image # https://pillow.readthedocs.io/
-
 
 p = lambda *a,**kw: print(*a, **kw, flush=True)
 p_err = lambda *a,**kw: print(*a, **kw, file=sys.stderr, flush=True) or 1
@@ -14,22 +12,31 @@ class adict(dict):
 		super().__init__(*args, **kws)
 		self.__dict__ = self
 
-def get_frames(p):
+def get_frames(p, frame_delays=None):
 	# https://www.piskelapp.com/p/create/sprite also saves spritesheets into same C arrays
-	# Uses "magick" CLI tool from https://imagemagick.org/ to parse GIF per-frame delays
-	frames, frame_delays = list(), list(map(int, sp.run([ 'magick', p,
-		'-format', '%T0 ', 'info:' ], check=True, stdout=sp.PIPE).stdout.decode().split()))
-	with Image.open(p) as img:
-		img_checks = dict( anim=img.is_animated, alpha=img.has_transparency_data,
-			palette=img.mode == 'P', palette_rgb=img.palette and img.palette.mode == 'RGB' )
-		assert all(img_checks.values()), img_checks
-		w, h, pal = img.width, img.height, img.palette
-		for n in range(img.n_frames):
-			img.seek(n); px = img.load(); frames.append(frame := list())
-			for y, x in it.product(range(h), range(w)):
-				if isinstance(p := px[x, y], int): frame.append(0) # all-bg first frame?
-				else: r, g, b, a = px[x, y]; frame.append((b<<16) + (g<<8) + r)
-	assert len(frames) == len(frame_delays), [len(frames), len(frame_delays)]
+	# Uses "magick" CLI tool from https://imagemagick.org/ to extract all data from GIFs
+	run = lambda *opts, n=None: sp.run([ 'magick', p if n is None
+		else f'{p}[{n}]', *opts ], check=True, stdout=sp.PIPE).stdout.decode()
+	frames = run('-format', '%W %H %X %Y %D %T\n', 'info:').splitlines()
+	if frame_delays:
+		frame_delays = list(map(int, frame_delays.split()))
+		if len(frames) != len(frame_delays): raise ValueError(
+			f'Frame count/delays mismatch: frames={len(frames)} delays={len(frame_delays)}' )
+	else: frame_delays = list(None for n in frames)
+	w, h = map(int, frames[0].split()[:2])
+	for n, frame_info in enumerate(frames):
+		ox, oy, d, t = frame_info.split()[2:]; ox, oy = int(ox), int(oy)
+		if frame_delays[n] is None: frame_delays[n] = int(t) * 10
+		if d == 'None': frame = frames[n] = frames[n-1].copy()
+		elif d == 'Background': frame = frames[n] = list(0 for n in range(w*h))
+		else: raise ValueError(f'Unsupported gif-frame dispose method: {frame_info}')
+		for line in run('txt:', n=n).splitlines():
+			if line.startswith('#'): continue
+			r, g, b, a = bytes.fromhex((ls := line.split())[2][1:])
+			if not a: continue
+			x, y = map(int, ls[0].rstrip(':').split(',')); x += ox; y += oy
+			if a != 255: raise ValueError(f'Unsupported semi-transparent pixel (frame={n}): {line}')
+			frame[y*w + x] = (b<<16) + (g<<8) + r
 	return adict(w=w, h=h, frames=frames, delays=frame_delays)
 
 def frame_crop(frame, w, h):
@@ -76,13 +83,18 @@ def main(args=None):
 	parser.add_argument('-b', '--bg-color', metavar='hex', help=dd('''
 		Hex-encoded background/dominant color to strip on exact pixel match.
 		Default - auto-detected as most common color among all pixels.'''))
+	parser.add_argument('-d', '--frame-delays', metavar='ms-list', help=dd('''
+		Space-separated list frame delays, same as output by command:
+			magick file.gif -format '%%T0 ' info:
+		Must have a number for each frame. Trailing zero can be removed for slow gifs.
+		To restore those when stripped by editor app or adjust animation speed.'''))
 	parser.add_argument('-q', '--quiet', action='store_true', help=dd('''
 		Don't print information about input/output sizes and compression to stderr.'''))
 	opts = parser.parse_args(sys.argv[1:] if args is None else args)
 
 	p_info = p_err if not opts.quiet else lambda *a,**kw: None
 	p_info(f'Source file [ {opts.src} ]: {os.stat(opts.src).st_size:,d} B')
-	img = get_frames(opts.src)
+	img = get_frames(opts.src, opts.frame_delays)
 	if bgc := opts.bg_color:
 		if len(bgc) == 3: bgc = ''.join(bgc[n]*2 for n in range(3))
 		if not bgc.startswith('0x'): bgc = f'0x{bgc}'

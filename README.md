@@ -263,9 +263,8 @@ animated GIF file down to ~290 bytes, which are much easier to embed into
 script as base64 blob and iterate/loop over in python code - moreso than
 raw GIF itself anyhow.
 
-Uses [pillow/PIL module] to get pixels from GIF frames and [ImageMagick]
-command-line "magick" tool to get per-frame delays (haven't found where PIL
-parses those to).
+Uses [ImageMagick] command-line "magick" tool to extract all necessary data
+from gifs (pixel colors, per-frame delays, etc), which seem to have full-featured
+parser for those.
 
-[pillow/PIL module]: https://pillow.readthedocs.io/
 [ImageMagick]: https://imagemagick.org/

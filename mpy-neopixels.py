@@ -98,7 +98,9 @@ def run_ack(ack):
 
 def run( gif, td_total, td_sleep, td_ackx=0, td_gifx=0,
 		ack=acks(b'\x14\0\0', 0.24, (1, 0.5, 0.2, 0.05)), gif_speed=1.0, **gif_kws ):
-	if not isinstance(gif, gifs): gif = gifs(*gif)
+	# See run_with_times for meaning of td_* values
+	if not isinstance(gif, gifs):
+		gifx = [None, 0, 0, None, None]; gifx[:len(gif)] = gif; gif = gifs(*gifx)
 	if ack and not isinstance(ack, acks): ack = acks(*ack)
 	gif_speed = 1 / gif_speed
 
@@ -127,9 +129,10 @@ def run_with_times( td_total=3 * 60, # total time before exiting
 	# td's here can be lists-of-tuples to auto-convert into tdr tuples
 	td_make = lambda td: ( td if isinstance(td, (int, float))
 		else list((tdt if isinstance(tdt, tdr) else tdr(*tdt)) for tdt in td) )
-	kws = dict(dict(dim_rgb=(0.7, 0.02, 0.003)), **kws)
-	run( gifs(gif_nyawn, ox=1, oy=1, rgb_border=b'\0\0\1', td_loop=None),
-		td_make(td_total), td_make(td_sleep), td_make(td_ackx), td_make(td_gifx), **kws )
+	run(**dict( dict( dim_rgb=(0.7, 0.02, 0.003),
+			gif=gifs(gif_nyawn, ox=1, oy=1, rgb_border=b'\0\0\1', td_loop=None) ),
+		td_total=td_make(td_total), td_sleep=td_make(td_sleep),
+		td_ackx=td_make(td_ackx), td_gifx=td_make(td_gifx), **kws ))
 
 def run_clear(): np.fill(b'\0\0\0'); np.write() # to clear leds from mpremote
 
