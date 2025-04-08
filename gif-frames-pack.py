@@ -35,8 +35,7 @@ def get_frames(p, frame_delays=None):
 			r, g, b, a = bytes.fromhex((ls := line.split())[2][1:])
 			if not a: continue
 			x, y = map(int, ls[0].rstrip(':').split(',')); x += ox; y += oy
-			if a != 255: raise ValueError(f'Unsupported semi-transparent pixel (frame={n}): {line}')
-			frame[y*w + x] = (b<<16) + (g<<8) + r
+			frame[y*w + x] = (r<<16) + (g<<8) + b
 	return adict(w=w, h=h, frames=frames, delays=frame_delays)
 
 def frame_crop(frame, w, h):
@@ -104,7 +103,6 @@ def main(args=None):
 	for frame in img.frames:
 		for n, c in enumerate(frame):
 			if not c: continue # = whatever background is
-			c = frame[n] = c & 0xffffff # strip A from ABGR, if any
 			pal.add(c); cc.setdefault(c, 0); cc[c] += 1
 	assert len(pal) <= 256, len(pal)
 	if not bgc: bgc = sorted((v, k) for k,v in cc.items())[-1][1]
@@ -139,6 +137,7 @@ def main(args=None):
 	with io.BytesIO() as dst:
 		dst.write(struct.pack('BB', w, h))
 		for c, n in sorted(pal.items(), key=lambda cn: cn[1]):
+			if c == bgc: continue
 			dst.write((c & 0xffffff).to_bytes(3, 'big'))
 		dst.write(b'\0\0\0')
 		for buff in frames_enc: dst.write(bytes(buff))

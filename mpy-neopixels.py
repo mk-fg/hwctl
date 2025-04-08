@@ -5,15 +5,6 @@ import random, collections as cs
 import io, deflate, binascii, math, neopixel, machine, time
 
 
-# 16x8 px, 49 frames, 11,490 ms total
-gif_nyawn = '''
-	eNoT4DBRUDL79NvIaI1rXjQDA4MRELOYJDiwsKg0XGA8wKIy4QLjBTeRDSUMpcpAK
-	REwSxDICgCzOEQ2AkkThpIA4U0CDCIQNieY/YXhqwnDF4j4FYarIgxXmJHEIew/DH
-	9tGP5A2DUM9TYMNRD1MQzxMgwxLEjiMHYtXA3ELmahzXA2ELEIbgNyDRhMICIMEKD
-	AABRHFwQCDRziKxDiIgwhcEOQxRGKkcRdGAqRDQGJKy47wHDBgUEAJsrVwKAFJBWn
-	HWD4ABMDCTEtYBDBEORagSG4qgEoWOHqpKW1agUXNjl2bKawY7MPh9twegWv1/EEF
-	a6gxYwK7FEntAkuyCoEinkTMJdVeCMk5lPAKZEPnFK5VBoOMByoAGoEAIMEiwY='''
-
 def parse_gif(b64_zlib_data):
 	gif = io.BytesIO(binascii.a2b_base64(b64_zlib_data))
 	with deflate.DeflateIO(gif, deflate.ZLIB) as gif:
@@ -44,7 +35,7 @@ def draw_border(c):
 	for y in range(nph): np[y*npw] = np[y*npw+npw-1] = c
 
 def draw_gif_func( gif_b64, ox=0, oy=0,
-		dim_rgb=(0.5, 0.035, 0.007), bg=b'\0\0\0', flip_x=False, flip_y=False ):
+		dim_rgb=(0.1, 0.02, 0.006), bg=b'\0\0\0', flip_x=False, flip_y=False ):
 	w, h, pal, frames = parse_gif(gif_b64)
 	npx, fn, fm = list(), 0, len(frames)
 	def _draw():
@@ -63,7 +54,7 @@ def draw_gif_func( gif_b64, ox=0, oy=0,
 				if not c: continue
 				if flip_x: x = npw-1 - x
 				npx.append(o := y + x)
-				np[o] = npc(tuple(round(c*k) for c, k in zip(pal[c], dim_rgb)))
+				np[o] = npc(tuple(round(c*k) for c, k in zip(pal[c-1], dim_rgb)))
 		return ms, loop
 	return _draw
 
@@ -122,6 +113,15 @@ def run( gif, td_total, td_sleep, td_ackx=0, td_gifx=0,
 		time.sleep_ms(tdr_ms(td_gifx))
 		np.fill(b'\0\0\0'); np.write()
 
+
+# 16x8 px, 4 colors (2b/px), 49 frames, 11,490 ms total
+gif_nyawn = '''
+	eNoT4FhjZBSd5/r7kxkDA4MRELOYJBzgYVFp2MDcwKIyYQPzBjeRDW8Y3isDpUTALEEgKwDM4hDZC
+	CR1GN4ECG8yYLCBsDnB7DUM63UY1kDE9zDst2HYw4wkDmGvYFitwbACwn7B8EqD4QVE/Q+GXxYMP1
+	iQxGHs13A1ELuYhTbD2UDEIrgNyFVg0IGIMECAAANQHF0Q5Bsc4iEIcRuGP3BDkMURipHEzzA8RjY
+	EJK64rIFhwwEGA5goqwODKAMDl+K0BoYFMDGQEGMAgwiGIGsIhmCoA1CwwtVJVDQ0hAubHDs2U9ix
+	2YfDbTi9gtfreIIKV9BiRgX2qBPaBBdkFQLFvA6Yyyq8ERLzKeCUyAdOqVwqDQ0MDRVAjQC8rZ64'''
+
 def run_with_times( td_total=3 * 60, # total time before exiting
 		td_sleep=[tdr(0.1, 0, 0), tdr(0.5, 6, 15), tdr(1, 8, 20)], # in disabled state b/w gifs
 		td_ackx=[tdr(0.5, 0, 0), tdr(0.5, 2, 5), tdr(1, 4, 9)], # after ack animation
@@ -129,8 +129,7 @@ def run_with_times( td_total=3 * 60, # total time before exiting
 	# td's here can be lists-of-tuples to auto-convert into tdr tuples
 	td_make = lambda td: ( td if isinstance(td, (int, float))
 		else list((tdt if isinstance(tdt, tdr) else tdr(*tdt)) for tdt in td) )
-	run(**dict( dict( dim_rgb=(0.7, 0.02, 0.003),
-			gif=gifs(gif_nyawn, ox=1, oy=1, rgb_border=b'\0\0\1', td_loop=None) ),
+	run(**dict( dict(gif=(gif_nyawn, 1, 1, b'\0\0\1')),
 		td_total=td_make(td_total), td_sleep=td_make(td_sleep),
 		td_ackx=td_make(td_ackx), td_gifx=td_make(td_gifx), **kws ))
 
