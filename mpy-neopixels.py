@@ -59,7 +59,7 @@ def draw_gif_func( gif_b64, ox=0, oy=0,
 	return _draw
 
 
-gifs = cs.namedtuple('GIFStage', 'b64 ox oy rgb_border td_loop')
+gifs = cs.namedtuple('GIFStage', gifs_keys := 'b64 ox oy rgb_border td_loop')
 acks = cs.namedtuple('ACKStage', 'rgb td trails')
 tdr = cs.namedtuple('TimeDeltaRNG', 'chance td_min td_max')
 
@@ -91,7 +91,11 @@ def run( gif, td_total, td_sleep, td_ackx=0, td_gifx=0,
 		ack=acks(b'\x14\0\0', 0.24, (1, 0.5, 0.2, 0.05)), gif_speed=1.0, **gif_kws ):
 	# See run_with_times for meaning of td_* values
 	if not isinstance(gif, gifs):
-		gifx = [None, 0, 0, None, None]; gifx[:len(gif)] = gif; gif = gifs(*gifx)
+		gifs_kws = dict.fromkeys(gifs_keys.split()); gifs_kws.update(ox=0, oy=0)
+		if isinstance(gif, dict): gif = gifs(**dict(gifs_kws, **gif))
+		else:
+			gifx = list(gifs_kws[k] for k in gifs_keys.split())
+			gifx[:len(gif)] = gif; gif = gifs(*gifx)
 	if ack and not isinstance(ack, acks): ack = acks(*ack)
 	gif_speed = 1 / gif_speed
 

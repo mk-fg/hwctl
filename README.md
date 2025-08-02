@@ -154,6 +154,9 @@ and invoke it via `mpremote exec` with those parameters in there
 
 ## Import and run with configuration tweaks
 % mpremote exec --no-follow 'import npx; npx.run_with_times(td_total=8*60)'
+
+## Clear anything on the panel
+% mpremote exec 'import npx; npx.run_clear()'
 ```
 
 All time-delta "td" parameters in addition to a fixed value in seconds accept

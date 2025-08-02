@@ -134,7 +134,7 @@ async def run(events, dev, btns, sigs, init_cmds, daemon_tasks=None):
 
 
 async def fifo_read_loop(p, mode, queue):
-	'Reads space-separated cmds from speficied fifo path into queue'
+	'Reads space-separated cmds from specified fifo path into queue'
 	buff = eof = None
 	def _ev():
 		nonlocal buff, eof
