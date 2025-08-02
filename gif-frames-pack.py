@@ -102,12 +102,12 @@ def main(args=None):
 	pal, cc = set(), dict()
 	for frame in img.frames:
 		for n, c in enumerate(frame):
-			if not c: continue # = whatever background is
-			pal.add(c); cc.setdefault(c, 0); cc[c] += 1
+			cc.setdefault(c, 0); cc[c] += 1
+			if c: pal.add(c)
 	assert len(pal) <= 256, len(pal)
 	if not bgc: bgc = sorted((v, k) for k,v in cc.items())[-1][1]
-	pal.discard(0) # black is never used as color for leds
-	pal = dict((c, n) for n, c in enumerate(sorted(pal, key=lambda c: c != bgc)))
+	cc.pop(0, 0); pal.discard(0) # black is never used as color for leds
+	pal = dict((c, n) for n, c in enumerate(sorted(pal, key=lambda c: c != bgc), 1))
 
 	w, h, nf = img.w, img.h, len(img.frames)
 	cb_pack = (cb := math.ceil(math.log2(cn := len(pal)))) < 5
