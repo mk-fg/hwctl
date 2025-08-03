@@ -86,7 +86,7 @@ def main(args=None):
 		Space-separated list frame delays, same as output by command:
 			magick file.gif -format '%%T0 ' info:
 		Must have a number for each frame. Trailing zero can be removed for slow gifs.
-		To restore those when stripped by editor app or adjust animation speed.'''))
+		Intended to restore delays when stripped by editor app or adjust animation speed.'''))
 	parser.add_argument('-q', '--quiet', action='store_true', help=dd('''
 		Don't print information about input/output sizes and compression to stderr.'''))
 	opts = parser.parse_args(sys.argv[1:] if args is None else args)

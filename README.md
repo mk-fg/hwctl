@@ -256,10 +256,9 @@ Uses [pyscard] module for NFC reader communication, via [PCSC lite] on linux.
 <a name=hdr-gif-frames-pack></a>
 ## [gif-frames-pack](gif-frames-pack.py)
 
-Helper script to efficiently pack GIF animation frames into an
-easy-to-decode and relatively small sequential color arrays to
-display via [neopixel] LED matrices (e.g. N-by-M rectangle of WS2812 LEDs),
-via e.g. [mpy-neopixels] script above.
+Helper script to efficiently pack GIF animation frames into an easy-to-decode
+and relatively small sequential color arrays to display via [neopixel] LED matrices
+(e.g. N-by-M rectangle of WS2812 LEDs), via [mpy-neopixels] script above.
 
 For example, it compresses complicated and messy 2,621-byte 16x8 49-frame
 animated GIF file down to ~290 bytes, which are much easier to embed into
@@ -270,4 +269,10 @@ Uses [ImageMagick] command-line "magick" tool to extract all necessary data
 from gifs (pixel colors, per-frame delays, etc), which seem to have full-featured
 parser for those.
 
+Usage: `./gif-frames-pack.py pixel-art-image.gif`\
+Output with `-h/--help` option also has a complete format description.
+
+Pixel art tools like [pixelorama] can be used to create/adjust source GIFs for this.
+
 [ImageMagick]: https://imagemagick.org/
+[pixelorama]: https://orama-interactive.itch.io/pixelorama
