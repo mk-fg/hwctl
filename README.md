@@ -165,6 +165,15 @@ to roll the chance on each of these in same order until first success,
 and then uniformly pick td from min-max range. These values are randomly
 picked like that before every inteval/delay, so will vary within single run.
 
+LED panels can be very bright (and run quite hot) at 100% power, and brightness
+of color at specific power value on those should be wildly uneven.
+For example, 10% power on red might look about as bright as 2%-power green
+or 0.6% power blue, so blue at 100% will visually overpower other color LEDs.\
+Script has a conservative `dim_rgb=(0.1, 0.02, 0.006)` default multiplier
+(values from example above), to be about as dim as possible, which likely
+needs to be tuned for each specific LED chips/panel and image data to look right
+(passing different tuple to `run_with_times()`).
+
 [neopixel]: https://docs.micropython.org/en/latest/library/neopixel.html
 [Waveshare Pico-RGB-LED]: https://www.waveshare.com/wiki/Pico-RGB-LED
 
@@ -266,7 +275,7 @@ script as base64 blob and iterate/loop over in python code - moreso than
 raw GIF itself anyhow.
 
 Uses [ImageMagick] command-line "magick" tool to extract all necessary data
-from gifs (pixel colors, per-frame delays, etc), which seem to have full-featured
+from GIFs (pixel colors, per-frame delays, etc), which seem to have full-featured
 parser for those.
 
 Usage: `./gif-frames-pack.py pixel-art-image.gif`\
