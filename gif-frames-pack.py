@@ -12,6 +12,12 @@ class adict(dict):
 		super().__init__(*args, **kws)
 		self.__dict__ = self
 
+def parse_rgb_color(s):
+	'Return RGB color as int value from [0x]R[R]G[G]B[B] spec'
+	if s.startswith('0x'): s = s[2:]
+	if len(s) == 3: s = ''.join(s[n]*2 for n in range(3))
+	return int(f'0x{s}', 16)
+
 def get_frames(p, frame_delays=None):
 	# https://www.piskelapp.com/p/create/sprite also saves spritesheets into same C arrays
 	# Uses "magick" CLI tool from https://imagemagick.org/ to extract all data from GIFs
@@ -87,6 +93,10 @@ def main(args=None):
 			magick file.gif -format '%%T0 ' info:
 		Must have a number for each frame. Trailing zero can be removed for slow gifs.
 		Intended to restore delays when stripped by editor app or adjust animation speed.'''))
+	parser.add_argument('-r', '--replace-colors', metavar='hex-A=hex-B ...', help=dd('''
+		Space/comma separated "from=to" hex color values to replace everywhere in the gif.
+		For convenience, when editing gif to same effect is more of a hassle for quick tests.
+		Warning will be printed if specified color(s) were never used in gif.'''))
 	parser.add_argument('-q', '--quiet', action='store_true', help=dd('''
 		Don't print information about input/output sizes and compression to stderr.'''))
 	opts = parser.parse_args(sys.argv[1:] if args is None else args)
@@ -94,25 +104,27 @@ def main(args=None):
 	p_info = p_err if not opts.quiet else lambda *a,**kw: None
 	p_info(f'Source file [ {opts.src} ]: {os.stat(opts.src).st_size:,d} B')
 	img = get_frames(opts.src, opts.frame_delays)
-	if bgc := opts.bg_color:
-		if len(bgc) == 3: bgc = ''.join(bgc[n]*2 for n in range(3))
-		if not bgc.startswith('0x'): bgc = f'0x{bgc}'
-		bgc = int(bgc, 16)
+	if bgc := opts.bg_color: bgc = parse_rgb_color(bgc)
+	if color_subs := (opts.replace_colors or '').replace(*', ').split():
+		color_subs = dict(map(parse_rgb_color, ab.split('=')) for ab in color_subs)
 
-	pal, cc = set(), dict()
+	pal, cc, css = set(), dict(), set(color_subs)
 	for frame in img.frames:
 		for n, c in enumerate(frame):
+			if c in color_subs: css.discard(c); c = frame[n] = color_subs[c]
 			cc.setdefault(c, 0); cc[c] += 1
 			if c: pal.add(c)
 	assert len(pal) <= 256, len(pal)
 	if not bgc: bgc = sorted((v, k) for k,v in cc.items())[-1][1]
 	cc.pop(0, 0); pal.discard(0) # black is never used as color for leds
-	pal = dict((c, n) for n, c in enumerate(sorted(pal, key=lambda c: c != bgc), 1))
+	pal = dict( (c, n) for n, c in # starts at 0 for bgc!=0 to render it same as "black"
+		enumerate(sorted(pal, key=lambda c: c != bgc), not bgc) )
 
 	w, h, nf = img.w, img.h, len(img.frames)
 	cb_pack = (cb := math.ceil(math.log2(cn := len(pal)))) < 5
 	p_info(f'GIF frames = {nf}, total duration = {sum(img.delays):,d} ms')
 	p_info(f'Palette colors = {cn}, color-bits = {cb}, bg = {bgc:x}, pack bits = {cb_pack}')
+	if css: p_info('WARNING: unused -r/--replace-colors - ' + ' '.join(f'{c:06x}' for c in css))
 
 	frames_enc = list()
 	for ms, frame in zip(img.delays, img.frames):
