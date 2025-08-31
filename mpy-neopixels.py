@@ -89,7 +89,7 @@ def run_ack(ack):
 				for x in range(npw): np[n*npw + x] = c
 		np.write(); time.sleep_ms(td_ack_iter)
 
-def run( gif, td_total, td_sleep, td_ackx=0, td_gifx=0,
+def run_ack_gif_loop( gif, td_total, td_sleep, td_ackx=0, td_gifx=0,
 		ack=acks(b'\x05\x08\x00', 0.24, (1, 0.5, 0.2, 0.05)), gif_speed=1.0, **gif_kws ):
 	# See run_with_times for meaning of td_* values
 	if not isinstance(gif, gifs):
@@ -135,10 +135,11 @@ def run_with_times( td_total=3 * 60, # total time before exiting
 	# td's here can be lists-of-tuples to auto-convert into tdr tuples
 	td_make = lambda td: ( td if isinstance(td, (int, float))
 		else list((tdt if isinstance(tdt, tdr) else tdr(*tdt)) for tdt in td) )
-	run(**dict( dict(gif=(gif_nyawn, 1, 1, b'\0\0\1')),
+	run_ack_gif_loop(**dict( dict(gif=(gif_nyawn, 1, 1, b'\0\0\1')),
 		td_total=td_make(td_total), td_sleep=td_make(td_sleep),
 		td_ackx=td_make(td_ackx), td_gifx=td_make(td_gifx), **kws ))
 
+def run(): run_with_times() # all defaults
 def run_clear(): np.fill(b'\0\0\0'); np.write() # to clear leds from mpremote
 
 if __name__ == '__main__': run_with_times()
