@@ -77,11 +77,11 @@ def run_ack(ack):
 	dx, dy = random.random() > 0.5, random.random() > 0.5
 	trails = tuple(npc(tuple(round(c*k) for c in ack.rgb)) for k in (ack.trails or [1]))
 	td_ack_iter = round(tdr_ms(ack.td) / npw)
-	for n in range(npw + len(trails) - 1):
+	for n in range(npw + (nt := len(trails))):
 		np.fill(b'\0\0\0')
 		fx, fy = ( ( (lambda o,_nk=nk: _nk - o)
 				if d else (lambda n,_m=m,_nk=nk: _m - 1 - (_nk-o)) )
-			for d, nk, m in [(dx, n, npw), (dy, min(nph, round(n * nph/npw)), nph)] )
+			for d, nk, m in [(dx, n, npw), (dy, min(nph, round(n * nph/npw)) + nt, nph)] )
 		for o, c in reversed(list(enumerate(trails))):
 			if npw > (n := fx(o)) >= 0:
 				for y in range(nph): np[y*npw + n] = c
@@ -139,7 +139,14 @@ def run_with_times( td_total=3 * 60, # total time before exiting
 		td_total=td_make(td_total), td_sleep=td_make(td_sleep),
 		td_ackx=td_make(td_ackx), td_gifx=td_make(td_gifx), **kws ))
 
+def run_clear_ack(ack=acks(b'\x14\0\0', 0.1, (1, 0.5, 0.2, 0.05)), td_ackx=0):
+	# Same as run_clear but with run_ack() animation before shutting down
+	if ack:
+		if not isinstance(ack, acks): ack = acks(*ack)
+		run_ack(ack)
+	time.sleep_ms(tdr_ms(td_ackx))
+	run_clear()
+
 def run(): run_with_times() # all defaults
 def run_clear(): np.fill(b'\0\0\0'); np.write() # to clear leds from mpremote
-
-if __name__ == '__main__': run_with_times()
+if __name__ == '__main__': run()
