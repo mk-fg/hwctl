@@ -86,7 +86,7 @@ def main(args=None):
 	parser.add_argument('src', help='GIF image file to convert.')
 	parser.add_argument('dst', nargs='?', help='Output file name for packed pixel data.')
 	parser.add_argument('-b', '--bg-color', metavar='hex', help=dd('''
-		Hex-encoded background/dominant color to strip on exact pixel match.
+		Hex-encoded (RRGGBB or RGB) background/dominant color to strip on exact pixel match.
 		Default - auto-detected as most common color among all pixels.'''))
 	parser.add_argument('-d', '--frame-delays', metavar='ms-list', help=dd('''
 		Space-separated list frame delays, same as output by command:
@@ -94,9 +94,9 @@ def main(args=None):
 		Must have a number for each frame. Trailing zero can be removed for slow gifs.
 		Intended to restore delays when stripped by editor app or adjust animation speed.'''))
 	parser.add_argument('-r', '--replace-colors', metavar='hex-A=hex-B ...', help=dd('''
-		Space/comma separated "from=to" hex color values to replace everywhere in the gif.
+		Space/comma separated "from=to" RRGGBB or RGB hex colors to replace everywhere in the gif.
 		For convenience, when editing gif to same effect is more of a hassle for quick tests.
-		Warning will be printed if specified color(s) were never used in gif.'''))
+		Warning printed if color(s) weren't used in a gif. Example: 5B6E45=139E00 F800=800'''))
 	parser.add_argument('-q', '--quiet', action='store_true', help=dd('''
 		Don't print information about input/output sizes and compression to stderr.'''))
 	opts = parser.parse_args(sys.argv[1:] if args is None else args)
