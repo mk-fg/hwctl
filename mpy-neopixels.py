@@ -6,7 +6,9 @@ import io, deflate, binascii, math, neopixel, machine, time
 
 
 def parse_gif(b64_zlib_data):
+	# import math, io, binascii, zlib # for testing with regular python
 	gif = io.BytesIO(binascii.a2b_base64(b64_zlib_data))
+	# with io.BytesIO(zlib.decompress(gif.getvalue())) as gif:
 	with deflate.DeflateIO(gif, deflate.ZLIB) as gif:
 		(w, h), pal, frames = gif.read(2), list(), list()
 		while any(c := gif.read(3)): pal.append(c)
@@ -88,7 +90,7 @@ def run_ack(ack):
 		np.write(); time.sleep_ms(td_ack_iter)
 
 def run( gif, td_total, td_sleep, td_ackx=0, td_gifx=0,
-		ack=acks(b'\x14\0\0', 0.24, (1, 0.5, 0.2, 0.05)), gif_speed=1.0, **gif_kws ):
+		ack=acks(b'\x05\x08\x00', 0.24, (1, 0.5, 0.2, 0.05)), gif_speed=1.0, **gif_kws ):
 	# See run_with_times for meaning of td_* values
 	if not isinstance(gif, gifs):
 		gifs_kws = dict.fromkeys(gifs_keys.split()); gifs_kws.update(ox=0, oy=0)
@@ -107,24 +109,24 @@ def run( gif, td_total, td_sleep, td_ackx=0, td_gifx=0,
 	gif_draw = draw_gif_func(gif.b64, ox=gif.ox, oy=gif.oy, **gif_kws)
 	tsd_total = time.ticks_add(time.ticks_ms(), tdr_ms(td_total))
 	while time.ticks_diff(tsd_total, time.ticks_ms()) > (td := tdr_ms(td_sleep)):
-		time.sleep_ms(td)
+		if td_ackx is None: time.sleep_ms(td) # skips first td_sleep
 		if gif.rgb_border: draw_border(gif.rgb_border)
 		tsd_gif = gif.td_loop and time.ticks_add(time.ticks_ms(), tdr_ms(gif.td_loop))
 		while not tsd_gif or time.ticks_diff(tsd_gif, time.ticks_ms()) > 0:
 			ms, end = gif_draw()
 			if ms: np.write(); time.sleep_ms(round(ms*gif_speed))
 			if end and not tsd_gif: break # no looping
-		time.sleep_ms(tdr_ms(td_gifx))
+		td_ackx = time.sleep_ms(tdr_ms(td_gifx))
 		np.fill(b'\0\0\0'); np.write()
 
 
 # 16x8 px, 4 colors (2b/px), 49 frames, 11,490 ms total
 gif_nyawn = '''
-	eNoT4FhjZBSd5/r7kxkDA4MRELOYJBzgYVFp2MDcwKIyYQPzBjeRDW8Y3isDpUTALEEgKwDM4hDZC
-	CR1GN4ECG8yYLCBsDnB7DUM63UY1kDE9zDst2HYw4wkDmGvYFitwbACwn7B8EqD4QVE/Q+GXxYMP1
-	iQxGHs13A1ELuYhTbD2UDEIrgNyFVg0IGIMECAAANQHF0Q5Bsc4iEIcRuGP3BDkMURipHEzzA8RjY
-	EJK64rIFhwwEGA5goqwODKAMDl+K0BoYFMDGQEGMAgwiGIGsIhmCoA1CwwtVJVDQ0hAubHDs2U9ix
-	2YfDbTi9gtfreIIKV9BiRgX2qBPaBBdkFQLFvA6Yyyq8ERLzKeCUyAdOqVwqDQ0MDRVAjQC8rZ64'''
+	eNoT4BCex7DGyOj3JzMGBgYjIGYxSTjAw6LSUMDswKIyoYC5wE1kwx2G+8pAKREwSxDICgCzOEQ2A
+	kkZhjsBwpsMGGwgbE4wO4YhXoYhBiJew1Bvw1DDjCQOYYcwhIswhEDYVxiuijBcgaj/wvDVhOELC5
+	I4jH0drgZiF7PQZjgbiFgEtwG5AgwyEBEGCFBgAIqjCwKBBg7xFQhxG4Y/cEOQxRGKkcTPMFxGNgQ
+	krrjMgaHgAIMBTJSrgUELSCpOc2AIgImBhJgWMIhgCHKtwBBc1QAUrHB10tJatYILmxw7NlPYsdmH
+	w204vYLX63iCClfQYkYF9qgT2gQXZBUCxbwMmMsqvBES8ynglMgHTqlcKg0ODA4VQI0A/KyXgw=='''
 
 def run_with_times( td_total=3 * 60, # total time before exiting
 		td_sleep=[tdr(0.1, 0, 0), tdr(0.5, 6, 15), tdr(1, 8, 20)], # in disabled state b/w gifs
