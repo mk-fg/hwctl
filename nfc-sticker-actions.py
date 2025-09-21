@@ -85,7 +85,7 @@ if __name__ == '__main__' and (
 ### Part 2/2 - Main asyncio-loop process
 
 import ctypes as ct, collections as cs, contextlib as cl, pathlib as pl, subprocess as sp
-import re, logging, struct, fcntl, termios, errno, asyncio, configparser
+import re, logging, logging.handlers, struct, fcntl, termios, errno, asyncio, configparser
 
 
 _td_days = dict(
@@ -127,6 +127,9 @@ conf_defaults = adict(
 		fifo_disable = '' ),
 	main = adict(
 		debug = False,
+		debug_log_file = '',
+		debug_log_default_bs = '100K',
+		debug_log_default_n = 3,
 		reader_name = '',
 		reader_uid_cmd = '',
 		reader_warmup = 3.0,
@@ -495,7 +498,51 @@ async def run(conf):
 	inotify.close()
 
 
+def main_debug_log_setup(stderr, dst, dst_bs, dst_n):
+	# Assumes logging.basicConfig initialized root logger/handler already
+	if stderr: logging.root.setLevel(logging.DEBUG)
+	else:
+		for handler in logging.root.handlers: handler.setLevel(logging.WARNING)
+	if not dst: return
+
+	def _size_parse(size):
+		if not size or not isinstance(size, str): return size
+		if size[-1].isdigit(): return float(size)
+		for u, u1 in reversed(list((u, 2 ** (n * 10)) for n, u in enumerate('BKMGT'))):
+			if size[-1] == u: break
+		else: raise ValueError('Unrecognized units: {} (value: {!r})'.format(size[-1], size))
+		return float(size[:-1]) * u1
+
+	if ':' in dst:
+		dst, dst_bs = dst.split(':', 1)
+		if ':' in dst_bs: dst_bs, dst_n = dst_bs.split(':', 1)
+	dst_bs, dst_n = _size_parse(dst_bs), int(dst_n)
+
+	handler = None
+	if dst == '-': handler = logging.StreamHandler(sys.stdout)
+	elif dst.startswith('%') and (fd := dst[1:]).isdigit():
+		handler = logging.StreamHandler(open(int(fd), 'a'))
+	elif (p := pl.Path(dst)).exists() and not p.is_file():
+		handler = logging.FileHandler(dst)
+	elif p.exists() and p.is_symlink(): p = p.resolve(True)
+	if not handler:
+		try:
+			with p.open('a') as dst: dst.tell()
+		except io.UnsupportedOperation:
+			log.warning( 'Specified log file path is'
+				' not seekable, disabling rotation: %s', p )
+			handler = logging.FileHandler(p)
+		else: handler = logging.handlers\
+			.RotatingFileHandler(p, maxBytes=dst_bs, backupCount=dst_n)
+
+	handler.setLevel(logging.DEBUG)
+	handler.setFormatter(logging.Formatter(
+		'{asctime} :: {levelname} :: {message}', style='{' ))
+	log.addHandler(handler); log.setLevel(logging.DEBUG)
+
 def main(args=None):
+	log_bs, log_n = (conf_defaults.main[f'debug_log_default_{k}'] for k in ['bs', 'n'])
+
 	import argparse, textwrap
 	dd = lambda text: re.sub( r' \t+', ' ',
 		textwrap.dedent(text).strip('\n') + '\n' ).replace('\t', '  ')
@@ -511,7 +558,14 @@ def main(args=None):
 			See nfc-sticker-actions.example.ini file in the repo next to
 				this script for an example and a list of all supported options there.
 			Default: %(default)s'''))
-	parser.add_argument('--debug', action='store_true', help='Verbose operation mode.')
+	parser.add_argument('--debug',
+		action='store_true', help='Enable debug logging to stderr.')
+	parser.add_argument('--debug-log-file',
+		metavar=f'log-file[:bytes={log_bs}[:backups={log_n}]]', help=dd(f'''
+			Enable debug output to an auto-rotated log file,
+				with optional [:bytes[:backups]] suffix (default :{log_bs}:{log_n}).
+			Can be e.g. %%3 to output to file descriptor 3, or '-' for stdout (default).
+			Log won't be rotated if dev, fd or non-seekable, resolved to realpath if symlink.'''))
 	opts = parser.parse_args(sys.argv[1:] if args is None else args)
 
 	global log
@@ -520,7 +574,10 @@ def main(args=None):
 	log = logging.getLogger('nsa')
 
 	conf = conf_parse_ini(p := pl.Path(opts.conf))
-	if conf.main.debug: logging.root.setLevel(logging.DEBUG)
+	main_debug_log_setup(
+		opts.debug or conf.main.debug,
+		opts.debug_log_file or conf.main.debug_log_file,
+		conf.main.debug_log_default_bs, conf.main.debug_log_default_n )
 	if not conf.hwctl.log_file:
 		if conf.hwctl.fifo_enable_btns:
 			parser.error( f'[conf {p.name}] hwctl.fifo-enable-btns'
